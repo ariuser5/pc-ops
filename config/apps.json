@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "description": "Configuration file for PC-OPS managed applications",
+  "version": "1.0.0",
+  "applications": [
+    {
+      "name": "uTorrent",
+      "enabled": true,
+      "executablePath": "C:\\Program Files\\uTorrent\\uTorrent.exe",
+      "processName": "uTorrent",
+      "arguments": "",
+      "workingDirectory": "",
+      "gracefulTimeout": 15,
+      "checkPowerSource": true,
+      "description": "BitTorrent client - high battery drain when active"
+    },
+    {
+      "name": "Example-App",
+      "enabled": false,
+      "executablePath": "C:\\Program Files\\Example\\app.exe",
+      "processName": "app",
+      "arguments": "--start-minimized",
+      "workingDirectory": "C:\\Program Files\\Example",
+      "gracefulTimeout": 10,
+      "checkPowerSource": true,
+      "description": "Example application configuration"
+    }
+  ],
+  "settings": {
+    "logLevel": "INFO",
+    "maxLogSizeMB": 10,
+    "stateDirectory": "%LOCALAPPDATA%\\PCOps\\State",
+    "logDirectory": "%LOCALAPPDATA%\\PCOps\\Logs"
+  }
+}

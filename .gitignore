@@ -1,0 +1,22 @@
+# Logs
+logs/
+*.log
+
+# State files (user-specific)
+*_running_state
+*_ignore_next_exit
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# PowerShell
+*.ps1.bak
+*.psm1.bak
+
+# VS Code
+.vscode/
+
+# User-specific config (optional - remove if you want to track)
+# config/apps.json
