@@ -18,5 +18,9 @@ desktop.ini
 # VS Code
 .vscode/
 
+# .NET build output
+**/bin/
+**/obj/
+
 # User-specific config (optional - remove if you want to track)
 # config/apps.json
