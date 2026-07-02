@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 
 try
@@ -30,6 +31,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 {
 	private readonly AppConfig _config;
 	private readonly string _configPath;
+	private readonly ConcurrentQueue<string> _pendingNotifications = new();
 	private readonly object _stateLock = new();
 	private readonly ThresholdState[] _thresholds;
 	private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
@@ -39,7 +41,6 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	private bool _shouldExit;
 	private TimeSpan _stoppedElapsed = TimeSpan.Zero;
 	private DateTimeOffset _lastResetAt = DateTimeOffset.Now;
-	private string _lastResetReason = "startup";
 	private string _lastEventMessage = "Timer started.";
 
 	public ActivityWatchdogApp(AppConfig config, string configPath)
@@ -108,7 +109,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			switch (keyInfo.Key)
 			{
 				case ConsoleKey.R:
-					Reset("manual");
+					Reset();
 					break;
 				case ConsoleKey.S:
 					StopTimer();
@@ -128,6 +129,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			{
 				var elapsed = GetElapsed();
 				var activeThreshold = EvaluateThresholds(elapsed);
+				DrainNotifications();
 
 				Render(elapsed, activeThreshold);
 			}
@@ -143,7 +145,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		}
 	}
 
-	private void Reset(string reason)
+	private void Reset()
 	{
 		lock (_stateLock)
 		{
@@ -151,7 +153,6 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			_isStopped = false;
 			_stoppedElapsed = TimeSpan.Zero;
 			_lastResetAt = DateTimeOffset.Now;
-			_lastResetReason = reason;
 			_lastEventMessage = "Timer reset.";
 
 			foreach (var threshold in _thresholds)
@@ -211,12 +212,24 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			}
 
 			threshold.HasTriggered = true;
-			var hookQueued = ThresholdHookRunner.TryQueue(threshold.Config, elapsed, _configPath);
-			var hookMessage = hookQueued ? " Hook queued." : string.Empty;
-			_lastEventMessage = $"Threshold '{threshold.Config.Name}' reached at {FormatElapsed(elapsed)}.{hookMessage}";
+			var dispatch = ThresholdHookRunner.QueueActions(threshold.Config, elapsed, _configPath, EnqueueNotification);
+			_lastEventMessage = $"Threshold '{threshold.Config.Name}' reached at {FormatElapsed(elapsed)}.{FormatDispatchSummary(dispatch)}";
 		}
 
 		return activeThreshold;
+	}
+
+	private void EnqueueNotification(string message)
+	{
+		_pendingNotifications.Enqueue(message);
+	}
+
+	private void DrainNotifications()
+	{
+		while (_pendingNotifications.TryDequeue(out var message))
+		{
+			_lastEventMessage = message;
+		}
 	}
 
 	private void Render(TimeSpan elapsed, ThresholdState? activeThreshold)
@@ -227,7 +240,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			: activeThreshold?.DisplayColor ?? ConsoleColor.Green;
 
 		var nextThreshold = _thresholds.FirstOrDefault(threshold => elapsed < threshold.Config.Duration);
-		var stateLine = $"State: {(_isStopped ? "stopped" : "running")} | Last reset: {_lastResetAt:yyyy-MM-dd HH:mm:ss} ({FormatResetReason(_lastResetReason)})";
+		var stateLine = $"State: {(_isStopped ? "stopped" : "running")} | Last reset: {_lastResetAt:yyyy-MM-dd HH:mm:ss}";
 
 		var lines = new (string Text, ConsoleColor? Color)[]
 		{
@@ -288,13 +301,23 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		return $"{(int)elapsed.TotalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00}";
 	}
 
-	private static string FormatResetReason(string reason)
+	private static string FormatDispatchSummary(ThresholdActionDispatch dispatch)
 	{
-		return reason switch
+		var messages = new List<string>(2);
+
+		if (dispatch.CommandQueued)
 		{
-			"manual" => "manual reset",
-			_ => reason
-		};
+			messages.Add("Hook queued.");
+		}
+
+		if (dispatch.AlarmQueued)
+		{
+			messages.Add("Alarm queued.");
+		}
+
+		return messages.Count == 0
+			? string.Empty
+			: $" {string.Join(" ", messages)}";
 	}
 
 	private static int GetRenderWidth()
@@ -358,6 +381,8 @@ internal static class HelpPrinter
 		Console.WriteLine();
 		Console.WriteLine("Notes:");
 		Console.WriteLine("  Threshold commands run once per threshold until the timer is reset.");
+		Console.WriteLine("  Hook output is surfaced through the Last event line when the command writes to stdout or stderr.");
+		Console.WriteLine("  Set alarm to true on a threshold to play the default alarm sequence.");
 	}
 }
 
@@ -418,6 +443,8 @@ internal sealed class ThresholdConfig
 	public string? Color { get; set; }
 
 	public string? Command { get; set; }
+
+	public bool Alarm { get; set; }
 }
 
 internal sealed class ThresholdState
@@ -452,26 +479,95 @@ internal static class ConsoleColorParser
 
 internal static class ThresholdHookRunner
 {
-	public static bool TryQueue(ThresholdConfig config, TimeSpan elapsed, string configPath)
+	private const int AlarmFrequency = 1200;
+	private const int AlarmDurationMs = 250;
+	private const int AlarmRepeatCount = 3;
+	private const int AlarmDelayMs = 125;
+
+	public static ThresholdActionDispatch QueueActions(ThresholdConfig config, TimeSpan elapsed, string configPath, Action<string> notify)
 	{
-		if (string.IsNullOrWhiteSpace(config.Command))
+		var commandQueued = false;
+		var alarmQueued = false;
+
+		if (!string.IsNullOrWhiteSpace(config.Command))
 		{
-			return false;
+			_ = Task.Run(() => RunCommandAsync(config, elapsed, configPath, notify));
+			commandQueued = true;
 		}
 
-		_ = Task.Run(() => StartProcess(config, elapsed, configPath));
-		return true;
+		if (config.Alarm)
+		{
+			_ = Task.Run(() => PlayAlarm(config, notify));
+			alarmQueued = true;
+		}
+
+		return new ThresholdActionDispatch(commandQueued, alarmQueued);
 	}
 
-	private static void StartProcess(ThresholdConfig config, TimeSpan elapsed, string configPath)
+	private static async Task RunCommandAsync(ThresholdConfig config, TimeSpan elapsed, string configPath, Action<string> notify)
 	{
 		try
 		{
-			using var process = Process.Start(CreateStartInfo(config.Command!, config, elapsed, configPath));
-			process?.Dispose();
+			using var process = new Process
+			{
+				StartInfo = CreateStartInfo(config.Command!, config, elapsed, configPath)
+			};
+
+			process.Start();
+
+			var stdoutTask = process.StandardOutput.ReadToEndAsync();
+			var stderrTask = process.StandardError.ReadToEndAsync();
+
+			await process.WaitForExitAsync();
+
+			var stdout = await stdoutTask;
+			var stderr = await stderrTask;
+			var output = FirstNonEmptyLine(stdout) ?? FirstNonEmptyLine(stderr);
+
+			if (process.ExitCode == 0)
+			{
+				notify(output is null
+					? $"Hook '{config.Name}' completed."
+					: $"Hook '{config.Name}': {output}");
+				return;
+			}
+
+			notify(output is null
+				? $"Hook '{config.Name}' failed with exit code {process.ExitCode}."
+				: $"Hook '{config.Name}' failed with exit code {process.ExitCode}: {output}");
 		}
-		catch
+		catch (Exception exception)
 		{
+			notify($"Hook '{config.Name}' failed: {exception.Message}");
+		}
+	}
+
+	private static void PlayAlarm(ThresholdConfig config, Action<string> notify)
+	{
+		try
+		{
+			if (OperatingSystem.IsWindows())
+			{
+				for (var index = 0; index < AlarmRepeatCount; index++)
+				{
+					Console.Beep(AlarmFrequency, AlarmDurationMs);
+
+					if (index + 1 < AlarmRepeatCount)
+					{
+						Thread.Sleep(AlarmDelayMs);
+					}
+				}
+			}
+			else
+			{
+				Console.Write("\a");
+			}
+
+			notify($"Alarm played for '{config.Name}'.");
+		}
+		catch (Exception exception)
+		{
+			notify($"Alarm for '{config.Name}' failed: {exception.Message}");
 		}
 	}
 
@@ -483,10 +579,32 @@ internal static class ThresholdHookRunner
 
 		startInfo.UseShellExecute = false;
 		startInfo.CreateNoWindow = true;
+		startInfo.RedirectStandardOutput = true;
+		startInfo.RedirectStandardError = true;
 		startInfo.Environment["ACTIVITY_WATCHDOG_THRESHOLD"] = config.Name;
 		startInfo.Environment["ACTIVITY_WATCHDOG_ELAPSED"] = elapsed.ToString();
 		startInfo.Environment["ACTIVITY_WATCHDOG_CONFIG"] = configPath;
 		startInfo.Environment["ACTIVITY_WATCHDOG_TRIGGERED_AT"] = DateTimeOffset.Now.ToString("O");
 		return startInfo;
 	}
+
+	private static string? FirstNonEmptyLine(string output)
+	{
+		if (string.IsNullOrWhiteSpace(output))
+		{
+			return null;
+		}
+
+		foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+		{
+			if (!string.IsNullOrWhiteSpace(line))
+			{
+				return line;
+			}
+		}
+
+		return null;
+	}
 }
+
+internal readonly record struct ThresholdActionDispatch(bool CommandQueued, bool AlarmQueued);
