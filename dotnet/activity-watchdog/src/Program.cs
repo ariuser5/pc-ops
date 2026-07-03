@@ -31,6 +31,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 {
 	private readonly AppConfig _config;
 	private readonly string _configPath;
+	private readonly WindowsBannerService? _bannerService;
 	private readonly ConcurrentQueue<string> _pendingNotifications = new();
 	private readonly object _stateLock = new();
 	private readonly ThresholdState[] _thresholds;
@@ -47,6 +48,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		_config = config;
 		_configPath = configPath;
+		_bannerService = WindowsBannerService.TryCreate(Reset);
 		_thresholds = config.Thresholds.Select(threshold => new ThresholdState(threshold)).ToArray();
 
 		if (Console.IsInputRedirected)
@@ -92,6 +94,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	public void Dispose()
 	{
 		_shutdown.Cancel();
+		_bannerService?.Dispose();
 	}
 
 	private void RunInputLoop()
@@ -160,6 +163,8 @@ internal sealed class ActivityWatchdogApp : IDisposable
 				threshold.HasTriggered = false;
 			}
 		}
+
+		_bannerService?.DismissActiveBanner();
 	}
 
 	private void StopTimer()
@@ -185,6 +190,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			_shouldExit = true;
 		}
 
+		_bannerService?.DismissActiveBanner();
 		_shutdown.Cancel();
 	}
 
@@ -212,11 +218,33 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			}
 
 			threshold.HasTriggered = true;
-			var dispatch = ThresholdHookRunner.QueueActions(threshold.Config, elapsed, _configPath, EnqueueNotification);
+			var dispatch = ThresholdHookRunner.QueueActions(threshold.Config, elapsed, _configPath, EnqueueNotification) with
+			{
+				BannerQueued = TryShowBanner(threshold.Config, elapsed)
+			};
 			_lastEventMessage = $"Threshold '{threshold.Config.Name}' reached at {FormatElapsed(elapsed)}.{FormatDispatchSummary(dispatch)}";
 		}
 
 		return activeThreshold;
+	}
+
+	private bool TryShowBanner(ThresholdConfig config, TimeSpan elapsed)
+	{
+		if (!config.Banner)
+		{
+			return false;
+		}
+
+		if (_bannerService is null)
+		{
+			EnqueueNotification($"Banner for '{config.Name}' is not available in this environment.");
+			return false;
+		}
+
+		return _bannerService.ShowBanner(
+			title: config.Name,
+			message: $"Threshold reached after {FormatElapsed(elapsed)}.",
+			buttonText: "Reset timer");
 	}
 
 	private void EnqueueNotification(string message)
@@ -315,6 +343,11 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			messages.Add("Alarm queued.");
 		}
 
+		if (dispatch.BannerQueued)
+		{
+			messages.Add("Banner shown.");
+		}
+
 		return messages.Count == 0
 			? string.Empty
 			: $" {string.Join(" ", messages)}";
@@ -383,6 +416,7 @@ internal static class HelpPrinter
 		Console.WriteLine("  Threshold commands run once per threshold until the timer is reset.");
 		Console.WriteLine("  Hook output is surfaced through the Last event line when the command writes to stdout or stderr.");
 		Console.WriteLine("  Set alarm to true on a threshold to play the default alarm sequence.");
+		Console.WriteLine("  Set banner to true on a threshold to show a Windows reset banner with a Reset timer button.");
 	}
 }
 
@@ -445,6 +479,8 @@ internal sealed class ThresholdConfig
 	public string? Command { get; set; }
 
 	public bool Alarm { get; set; }
+
+	public bool Banner { get; set; }
 }
 
 internal sealed class ThresholdState
@@ -607,4 +643,4 @@ internal static class ThresholdHookRunner
 	}
 }
 
-internal readonly record struct ThresholdActionDispatch(bool CommandQueued, bool AlarmQueued);
+internal readonly record struct ThresholdActionDispatch(bool CommandQueued, bool AlarmQueued, bool BannerQueued = false);
