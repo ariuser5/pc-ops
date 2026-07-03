@@ -33,4 +33,4 @@ Hook output is surfaced through the app's `Last event` line when the command wri
 
 Set `alarm` to `true` on a threshold to play the default alarm sequence when that threshold is reached.
 
-Set `banner` to `true` on a threshold to show a Windows banner with `Reset timer` and `Dismiss` buttons. `Reset timer` resets the timer and dismisses the banner; `Dismiss` only hides the banner until the threshold is reached again.
+Set `banner` to `true` on a threshold to show a desktop banner with `Reset timer` and `Dismiss` buttons. `Reset timer` resets the timer and dismisses the banner; `Dismiss` only hides the banner until the threshold is reached again. The banner now targets Windows, macOS, and Linux desktop environments.

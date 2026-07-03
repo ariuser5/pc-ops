@@ -31,7 +31,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 {
 	private readonly AppConfig _config;
 	private readonly string _configPath;
-	private readonly WindowsBannerService? _bannerService;
+	private readonly DesktopBannerService? _bannerService;
 	private readonly ConcurrentQueue<string> _pendingNotifications = new();
 	private readonly object _stateLock = new();
 	private readonly ThresholdState[] _thresholds;
@@ -48,7 +48,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		_config = config;
 		_configPath = configPath;
-		_bannerService = WindowsBannerService.TryCreate(Reset);
+		_bannerService = DesktopBannerService.TryCreate(Reset);
 		_thresholds = config.Thresholds.Select(threshold => new ThresholdState(threshold)).ToArray();
 
 		if (Console.IsInputRedirected)
