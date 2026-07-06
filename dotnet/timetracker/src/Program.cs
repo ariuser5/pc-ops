@@ -107,13 +107,21 @@ internal sealed class TimeTrackerCli
 
 	private IReadOnlyList<string> FormatStatus(TrackerState state, DateTimeOffset? currentTaskSince, IReadOnlyList<BreakIntervalEntry> breakIntervals, TimetrackSnapshot todaySnapshot)
 	{
+		var totalBreakDuration = breakIntervals.Aggregate(TimeSpan.Zero, static (sum, item) => sum + item.Duration);
+		var configuredWorkDuration = state.WorkdayEnd - state.WorkdayStart;
+		var netWorkDuration = configuredWorkDuration - totalBreakDuration;
+		if (netWorkDuration < TimeSpan.Zero)
+		{
+			netWorkDuration = TimeSpan.Zero;
+		}
+
 		var lines = new List<string>
 		{
 			"TimeTracker status",
 			$"Current task: {state.CurrentTask}",
 			$"Current task since: {FormatCurrentTaskSince(currentTaskSince)}",
 			$"Recording: {(state.IsRecording ? "active" : "paused")}",
-			$"Working hours: {state.WorkdayStart:HH\\:mm} - {state.WorkdayEnd:HH\\:mm}",
+			$"Working hours: {state.WorkdayStart:HH\\:mm} - {state.WorkdayEnd:HH\\:mm} | total {FormatElapsed(netWorkDuration)}",
 			$"Breaks: {FormatBreakSummary(breakIntervals)}",
 			$"Working days: Monday-Friday",
 			$"Event log: {_reportService.EventLogPath}",
