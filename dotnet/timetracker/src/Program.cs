@@ -206,13 +206,24 @@ internal sealed class TimeTrackerCli
 	private static string FormatElapsed(TimeSpan elapsed)
 	{
 		var rounded = TimeSpan.FromMinutes(Math.Round(elapsed.TotalMinutes, MidpointRounding.AwayFromZero));
+		var parts = new List<string>();
 
-		if (rounded.TotalHours >= 24)
+		if (rounded.Days > 0)
 		{
-			return $"{(int)rounded.TotalDays}d {rounded.Hours:00}:{rounded.Minutes:00}";
+			parts.Add($"{rounded.Days}d");
 		}
 
-		return $"{(int)rounded.TotalHours:00}:{rounded.Minutes:00}";
+		if (rounded.Hours > 0)
+		{
+			parts.Add($"{rounded.Hours}h");
+		}
+
+		if (rounded.Minutes > 0 || parts.Count == 0)
+		{
+			parts.Add($"{rounded.Minutes}m");
+		}
+
+		return string.Concat(parts);
 	}
 
 	private static string FormatCurrentTaskSince(DateTimeOffset? currentTaskSince)
