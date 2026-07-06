@@ -9,6 +9,16 @@ var rootCommand = CommandFactory.Create(app);
 try
 {
 	var parseResult = rootCommand.Parse(args);
+	if (parseResult.GetValue(CommandFactory.RefreshStateOption))
+	{
+		app.RefreshStateSnapshot();
+
+		if (parseResult.CommandResult.Command == rootCommand)
+		{
+			return 0;
+		}
+	}
+
 	return await parseResult.InvokeAsync(new InvocationConfiguration());
 }
 catch (Exception exception)
@@ -101,6 +111,12 @@ internal sealed class TimeTrackerCli
 	public int ResumeRecording()
 	{
 		WriteLines([_reportService.ResumeRecording().Message]);
+		return 0;
+	}
+
+	public int RefreshStateSnapshot()
+	{
+		WriteLines([_reportService.RefreshStateSnapshot().Message]);
 		return 0;
 	}
 
@@ -270,9 +286,12 @@ internal sealed class TimeTrackerCli
 
 internal static class CommandFactory
 {
+	public static Option<bool> RefreshStateOption { get; } = CreateRefreshStateOption();
+
 	public static RootCommand Create(TimeTrackerCli app)
 	{
 		var rootCommand = new RootCommand("Command-style task tracker with persisted workday state.");
+		rootCommand.Add(RefreshStateOption);
 
 		rootCommand.Add(CreateStatusCommand(app));
 		rootCommand.Add(CreateTaskCommand(app));
@@ -289,6 +308,13 @@ internal static class CommandFactory
 		rootCommand.Add(CreateLegacySetHoursCommand(app));
 
 		return rootCommand;
+	}
+
+	private static Option<bool> CreateRefreshStateOption()
+	{
+		var option = new Option<bool>("--refresh-state", ["--force-sync"]);
+		option.Description = "Rebuild tracker-state.json from the event log before running the command.";
+		return option;
 	}
 
 	private static Command CreateBreakAddCommand(TimeTrackerCli app)

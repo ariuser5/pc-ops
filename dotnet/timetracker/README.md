@@ -17,6 +17,7 @@ dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Fea
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Feature-Work --from 10:15
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set --from 10:15
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Ticket-123 --from 09:00 --to 11:00
+dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- --refresh-state status
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 12:00 --to 12:30
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- hours set --from 09:00 --to 17:00
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- stop
@@ -35,6 +36,7 @@ dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- report --fro
 - `stop`: pause automatic workday allocation.
 - `resume`: resume automatic workday allocation.
 - `report [--from yyyy-MM-dd] [--to yyyy-MM-dd]`: show a time summary for a date interval. If no dates are provided, it reports today.
+- `--refresh-state`: rebuild `tracker-state.json` from the event log before running a command. You can also run it by itself.
 - `help`: show help.
 
 Legacy compatibility aliases still work, but they are no longer the documented API:
@@ -63,3 +65,5 @@ The app stores append-only tracking data under `dotnet/timetracker/reports/`.
 
 - `tracker-events.jsonl`: the append-only event log. Commands write structured events here, such as task changes, work-hour updates, stop/resume events, bounded corrections, and breaks.
 - `tracker-state.json`: a persisted snapshot of the latest state for quick reads. Reports still rebuild the timeline from `tracker-events.jsonl`; this file is a convenience cache, not the source of history.
+
+If you ever suspect the snapshot drifted from the log, run `timetracker --refresh-state` or `timetracker --refresh-state status`.

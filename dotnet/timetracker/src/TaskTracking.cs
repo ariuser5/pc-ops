@@ -36,6 +36,25 @@ internal sealed class DailyTaskReportService
 		return LoadState() ?? CreateInitialState(DateTimeOffset.Now);
 	}
 
+	public StateRefreshResult RefreshStateSnapshot()
+	{
+		var eventState = ReadEvents().LastOrDefault()?.State;
+		if (eventState is null)
+		{
+			var snapshotState = LoadStateSnapshot();
+			return snapshotState is null
+				? new StateRefreshResult(false, "No event log state found; nothing to refresh.")
+				: new StateRefreshResult(false, "No event log state found; existing snapshot left unchanged.");
+		}
+
+		var snapshotBeforeRefresh = LoadStateSnapshot();
+		var changed = snapshotBeforeRefresh != eventState;
+		SaveState(eventState);
+		return new StateRefreshResult(changed, changed
+			? "State snapshot refreshed from the event log."
+			: "State snapshot already matches the event log.");
+	}
+
 	public TrackerMutationResult ResumeRecording()
 	{
 		var now = DateTimeOffset.Now;
@@ -650,18 +669,37 @@ internal sealed class DailyTaskReportService
 
 	private TrackerState? LoadState()
 	{
-		if (File.Exists(StateFilePath))
+		var eventState = ReadEvents().LastOrDefault()?.State;
+		if (eventState is not null)
 		{
-			var stateJson = File.ReadAllText(StateFilePath);
-			var state = JsonSerializer.Deserialize<TrackerState>(stateJson);
-			if (state is not null)
+			var snapshotState = LoadStateSnapshot();
+			if (snapshotState != eventState)
 			{
-				return state;
+				SaveState(eventState);
 			}
+
+			return eventState;
 		}
 
-		var lastEvent = ReadEvents().LastOrDefault();
-		return lastEvent?.State;
+		return LoadStateSnapshot();
+	}
+
+	private TrackerState? LoadStateSnapshot()
+	{
+		if (!File.Exists(StateFilePath))
+		{
+			return null;
+		}
+
+		try
+		{
+			var stateJson = File.ReadAllText(StateFilePath);
+			return JsonSerializer.Deserialize<TrackerState>(stateJson);
+		}
+		catch (JsonException)
+		{
+			return null;
+		}
 	}
 
 	private IEnumerable<TrackerEvent> ReadEvents()
@@ -768,3 +806,5 @@ internal sealed record BreakIntervalEntry(DateTimeOffset Start, DateTimeOffset E
 internal sealed record CurrentTaskContext(DateTimeOffset Start, string? PreviousTaskName);
 
 internal sealed record TaskSegmentContext(DateTimeOffset Start, DateTimeOffset End, string? PreviousTaskName, string? NextTaskName);
+
+internal sealed record StateRefreshResult(bool Changed, string Message);
