@@ -32,16 +32,24 @@ internal sealed class TimeTrackerCli
 	public int ShowStatus()
 	{
 		var now = DateTimeOffset.Now;
+		var today = DateOnly.FromDateTime(now.LocalDateTime.Date);
 		WriteLines(FormatStatus(
 			_reportService.GetCurrentState(),
 			_reportService.GetCurrentTaskSince(now),
-			_reportService.BuildRangeSummary(DateOnly.FromDateTime(now.LocalDateTime.Date), DateOnly.FromDateTime(now.LocalDateTime.Date), now)));
+			_reportService.GetBreakIntervals(today, now),
+			_reportService.BuildRangeSummary(today, today, now)));
 		return 0;
 	}
 
 	public int EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
 	{
 		WriteLines([_reportService.EditInterval(from, to, taskName).Message]);
+		return 0;
+	}
+
+	public int SetBreak(DateTimeOffset from, DateTimeOffset to)
+	{
+		WriteLines([_reportService.SetBreak(from, to).Message]);
 		return 0;
 	}
 
@@ -97,7 +105,7 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	private IReadOnlyList<string> FormatStatus(TrackerState state, DateTimeOffset? currentTaskSince, TimetrackSnapshot todaySnapshot)
+	private IReadOnlyList<string> FormatStatus(TrackerState state, DateTimeOffset? currentTaskSince, IReadOnlyList<BreakIntervalEntry> breakIntervals, TimetrackSnapshot todaySnapshot)
 	{
 		var lines = new List<string>
 		{
@@ -106,6 +114,7 @@ internal sealed class TimeTrackerCli
 			$"Current task since: {FormatCurrentTaskSince(currentTaskSince)}",
 			$"Recording: {(state.IsRecording ? "active" : "paused")}",
 			$"Working hours: {state.WorkdayStart:HH\\:mm} - {state.WorkdayEnd:HH\\:mm}",
+			$"Breaks: {FormatBreakSummary(breakIntervals)}",
 			$"Working days: Monday-Friday",
 			$"Event log: {_reportService.EventLogPath}",
 			$"State file: {_reportService.StateFilePath}",
@@ -115,6 +124,20 @@ internal sealed class TimeTrackerCli
 
 		lines.AddRange(FormatStatusSummary(todaySnapshot));
 		return lines;
+	}
+
+	private static string FormatBreakSummary(IReadOnlyList<BreakIntervalEntry> breakIntervals)
+	{
+		if (breakIntervals.Count == 0)
+		{
+			return "none recorded today";
+		}
+
+		var items = breakIntervals
+			.Select(static item => $"{item.Start.LocalDateTime:HH:mm}-{item.End.LocalDateTime:HH:mm} ({FormatElapsed(item.Duration)})")
+			.ToList();
+		var totalBreak = breakIntervals.Aggregate(TimeSpan.Zero, static (sum, item) => sum + item.Duration);
+		return $"{string.Join(", ", items)} | total {FormatElapsed(totalBreak)}";
 	}
 
 	private static IReadOnlyList<string> FormatStatusSummary(TimetrackSnapshot snapshot)
@@ -219,12 +242,34 @@ internal static class CommandFactory
 		rootCommand.Add(CreateStatusCommand(app));
 		rootCommand.Add(CreateSetTaskCommand(app));
 		rootCommand.Add(CreateEditIntervalCommand(app));
+		rootCommand.Add(CreateSetBreakCommand(app));
 		rootCommand.Add(CreateSetHoursCommand(app));
 		rootCommand.Add(CreateStopCommand(app));
 		rootCommand.Add(CreateResumeCommand(app));
 		rootCommand.Add(CreateReportCommand(app));
 
 		return rootCommand;
+	}
+
+	private static Command CreateSetBreakCommand(TimeTrackerCli app)
+	{
+		var fromOption = new Option<DateTimeOffset>("--from");
+		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		fromOption.CustomParser = ParseRequiredMomentOption;
+		fromOption.Required = true;
+
+		var toOption = new Option<DateTimeOffset>("--to");
+		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		toOption.CustomParser = ParseRequiredMomentOption;
+		toOption.Required = true;
+
+		var command = new Command("set-break", "Subtract a break interval from tracked work time.");
+		command.Add(fromOption);
+		command.Add(toOption);
+		command.SetAction(parseResult => app.SetBreak(
+			parseResult.GetValue(fromOption),
+			parseResult.GetValue(toOption)));
+		return command;
 	}
 
 	private static Command CreateEditIntervalCommand(TimeTrackerCli app)
