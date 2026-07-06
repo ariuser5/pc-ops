@@ -1,4 +1,3 @@
-﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -29,10 +28,11 @@ catch (Exception exception)
 
 internal sealed class ActivityWatchdogApp : IDisposable
 {
+	private const string ResetBannerButtonText = "Reset timer";
+
 	private readonly AppConfig _config;
 	private readonly string _configPath;
 	private readonly DesktopBannerService? _bannerService;
-	private readonly ConcurrentQueue<string> _pendingNotifications = new();
 	private readonly object _stateLock = new();
 	private readonly ThresholdState[] _thresholds;
 	private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
@@ -40,6 +40,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 
 	private bool _isStopped;
 	private bool _shouldExit;
+	private int _lastRenderLineCount;
 	private TimeSpan _stoppedElapsed = TimeSpan.Zero;
 	private DateTimeOffset _lastResetAt = DateTimeOffset.Now;
 	private string _lastEventMessage = "Timer started.";
@@ -48,13 +49,8 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		_config = config;
 		_configPath = configPath;
-		_bannerService = DesktopBannerService.TryCreate(Reset);
+		_bannerService = DesktopBannerService.TryCreate(() => Reset("banner"));
 		_thresholds = config.Thresholds.Select(threshold => new ThresholdState(threshold)).ToArray();
-
-		if (Console.IsInputRedirected)
-		{
-			_lastEventMessage = "Console input is redirected; keyboard controls are unavailable.";
-		}
 	}
 
 	public int Run()
@@ -67,7 +63,6 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		{
 			uiLoopTask = Task.Run(RunUiLoop);
 			RunInputLoop();
-
 			return 0;
 		}
 		finally
@@ -109,16 +104,28 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		{
 			var keyInfo = Console.ReadKey(intercept: true);
 
+			if (keyInfo.Key == ConsoleKey.C && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+			{
+				RequestQuit();
+				continue;
+			}
+
 			switch (keyInfo.Key)
 			{
 				case ConsoleKey.R:
-					Reset();
+					Reset("key");
 					break;
 				case ConsoleKey.S:
 					StopTimer();
 					break;
 				case ConsoleKey.Q:
 					RequestQuit();
+					break;
+				case ConsoleKey.H:
+					ShowHelpHint();
+					break;
+				case ConsoleKey.C:
+					ClearDetailsArea();
 					break;
 			}
 		}
@@ -132,8 +139,6 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			{
 				var elapsed = GetElapsed();
 				var activeThreshold = EvaluateThresholds(elapsed);
-				DrainNotifications();
-
 				Render(elapsed, activeThreshold);
 			}
 
@@ -148,7 +153,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		}
 	}
 
-	private void Reset()
+	private void Reset(string source)
 	{
 		lock (_stateLock)
 		{
@@ -156,7 +161,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			_isStopped = false;
 			_stoppedElapsed = TimeSpan.Zero;
 			_lastResetAt = DateTimeOffset.Now;
-			_lastEventMessage = "Timer reset.";
+			_lastEventMessage = source == "banner" ? "Timer reset from banner." : "Timer reset.";
 
 			foreach (var threshold in _thresholds)
 			{
@@ -167,18 +172,20 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		_bannerService?.DismissActiveBanner();
 	}
 
-	private void StopTimer()
+	private bool StopTimer()
 	{
 		lock (_stateLock)
 		{
 			if (_isStopped)
 			{
-				return;
+				_lastEventMessage = "Timer is already stopped.";
+				return false;
 			}
 
 			_stoppedElapsed = _stopwatch.Elapsed;
 			_isStopped = true;
 			_lastEventMessage = $"Timer stopped at {FormatElapsed(_stoppedElapsed)}.";
+			return true;
 		}
 	}
 
@@ -186,6 +193,11 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		lock (_stateLock)
 		{
+			if (_shouldExit)
+			{
+				return;
+			}
+
 			_lastEventMessage = "Quitting.";
 			_shouldExit = true;
 		}
@@ -218,10 +230,17 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			}
 
 			threshold.HasTriggered = true;
-			var dispatch = ThresholdHookRunner.QueueActions(threshold.Config, elapsed, _configPath, EnqueueNotification) with
+			var dispatch = ThresholdHookRunner.QueueActions(threshold.Config, elapsed, _configPath, message =>
+			{
+				lock (_stateLock)
+				{
+					_lastEventMessage = message;
+				}
+			}) with
 			{
 				BannerQueued = TryShowBanner(threshold.Config, elapsed)
 			};
+
 			_lastEventMessage = $"Threshold '{threshold.Config.Name}' reached at {FormatElapsed(elapsed)}.{FormatDispatchSummary(dispatch)}";
 		}
 
@@ -237,27 +256,14 @@ internal sealed class ActivityWatchdogApp : IDisposable
 
 		if (_bannerService is null)
 		{
-			EnqueueNotification($"Banner for '{config.Name}' is not available in this environment.");
+			_lastEventMessage = $"Banner for '{config.Name}' is not available in this environment.";
 			return false;
 		}
 
 		return _bannerService.ShowBanner(
 			title: config.Name,
 			message: $"Threshold reached after {FormatElapsed(elapsed)}.",
-			buttonText: "Reset timer");
-	}
-
-	private void EnqueueNotification(string message)
-	{
-		_pendingNotifications.Enqueue(message);
-	}
-
-	private void DrainNotifications()
-	{
-		while (_pendingNotifications.TryDequeue(out var message))
-		{
-			_lastEventMessage = message;
-		}
+			buttonText: ResetBannerButtonText);
 	}
 
 	private void Render(TimeSpan elapsed, ThresholdState? activeThreshold)
@@ -270,7 +276,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		var nextThreshold = _thresholds.FirstOrDefault(threshold => elapsed < threshold.Config.Duration);
 		var stateLine = $"State: {(_isStopped ? "stopped" : "running")} | Last reset: {_lastResetAt:yyyy-MM-dd HH:mm:ss}";
 
-		var lines = new (string Text, ConsoleColor? Color)[]
+		var lines = new List<(string Text, ConsoleColor? Color)>
 		{
 			("Activity Watchdog", ConsoleColor.Cyan),
 			($"Elapsed: {FormatElapsed(elapsed)}", statusColor),
@@ -278,7 +284,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			($"Next threshold: {DescribeNextThreshold(nextThreshold)}", null),
 			($"Last event: {_lastEventMessage}", null),
 			($"Config: {_configPath}", ConsoleColor.DarkGray),
-			("Controls: [R] reset  [S] stop  [Q] quit", ConsoleColor.DarkGray)
+			("Controls: [R] reset  [S] stop  [Q] quit  [H] help  [C] clear", ConsoleColor.DarkGray)
 		};
 
 		try
@@ -296,7 +302,23 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			Console.WriteLine(FitToWidth(line.Text, width));
 		}
 
+		for (var lineIndex = lines.Count; lineIndex < _lastRenderLineCount; lineIndex++)
+		{
+			Console.WriteLine(new string(' ', width));
+		}
+
+		_lastRenderLineCount = lines.Count;
 		Console.ResetColor();
+	}
+
+	private void ShowHelpHint()
+	{
+		_lastEventMessage = "Controls: R reset, S stop, Q quit, H help, C clear.";
+	}
+
+	private void ClearDetailsArea()
+	{
+		_lastEventMessage = "Details cleared.";
 	}
 
 	private static string DescribeNextThreshold(ThresholdState? nextThreshold)
@@ -348,9 +370,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			messages.Add("Banner shown.");
 		}
 
-		return messages.Count == 0
-			? string.Empty
-			: $" {string.Join(" ", messages)}";
+		return messages.Count == 0 ? string.Empty : $" {string.Join(" ", messages)}";
 	}
 
 	private static int GetRenderWidth()
@@ -410,13 +430,14 @@ internal static class HelpPrinter
 		Console.WriteLine("Controls while running:");
 		Console.WriteLine("  R  Reset and restart the timer");
 		Console.WriteLine("  S  Stop the timer; reset starts it again");
-		Console.WriteLine("  Q  Quit");
+		Console.WriteLine("  Q  Quit the app");
+		Console.WriteLine("  H  Show the shortcut list");
+		Console.WriteLine("  C  Clear the details area");
 		Console.WriteLine();
 		Console.WriteLine("Notes:");
 		Console.WriteLine("  Threshold commands run once per threshold until the timer is reset.");
 		Console.WriteLine("  Hook output is surfaced through the Last event line when the command writes to stdout or stderr.");
 		Console.WriteLine("  Set alarm to true on a threshold to play the default alarm sequence.");
-		Console.WriteLine("  Set banner to true on a threshold to show a Windows reset banner with a Reset timer button.");
 	}
 }
 
@@ -562,9 +583,7 @@ internal static class ThresholdHookRunner
 
 			if (process.ExitCode == 0)
 			{
-				notify(output is null
-					? $"Hook '{config.Name}' completed."
-					: $"Hook '{config.Name}': {output}");
+				notify(output is null ? $"Hook '{config.Name}' completed." : $"Hook '{config.Name}': {output}");
 				return;
 			}
 
@@ -587,7 +606,6 @@ internal static class ThresholdHookRunner
 				for (var index = 0; index < AlarmRepeatCount; index++)
 				{
 					Console.Beep(AlarmFrequency, AlarmDurationMs);
-
 					if (index + 1 < AlarmRepeatCount)
 					{
 						Thread.Sleep(AlarmDelayMs);

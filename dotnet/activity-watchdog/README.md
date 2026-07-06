@@ -13,6 +13,8 @@ dotnet run --project ./dotnet/activity-watchdog/src/ActivityWatchdog.csproj
 - `R`: reset and restart the timer.
 - `S`: stop the timer. There is no resume; resetting starts it again.
 - `Q`: quit the app.
+- `H`: show the shortcut list in the console area.
+- `C`: clear the console details area.
 
 ## Config
 
@@ -34,3 +36,5 @@ Hook output is surfaced through the app's `Last event` line when the command wri
 Set `alarm` to `true` on a threshold to play the default alarm sequence when that threshold is reached.
 
 Set `banner` to `true` on a threshold to show a desktop banner with `Reset timer` and `Dismiss` buttons. `Reset timer` resets the timer and dismisses the banner; `Dismiss` only hides the banner until the threshold is reached again. The banner now targets Windows, macOS, and Linux desktop environments.
+
+Time tracking now lives in the separate `dotnet/timetracker` project.
