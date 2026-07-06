@@ -34,13 +34,31 @@ internal sealed class TimeTrackerCli
 		var now = DateTimeOffset.Now;
 		WriteLines(FormatStatus(
 			_reportService.GetCurrentState(),
+			_reportService.GetCurrentTaskSince(now),
 			_reportService.BuildRangeSummary(DateOnly.FromDateTime(now.LocalDateTime.Date), DateOnly.FromDateTime(now.LocalDateTime.Date), now)));
 		return 0;
 	}
 
-	public int SetTask(string taskName)
+	public int EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
 	{
-		WriteLines([_reportService.SetTask(taskName).Message]);
+		WriteLines([_reportService.EditInterval(from, to, taskName).Message]);
+		return 0;
+	}
+
+	public int SetTask(string? taskName, DateTimeOffset? since)
+	{
+		var effectiveTaskName = taskName;
+		if (string.IsNullOrWhiteSpace(effectiveTaskName))
+		{
+			if (since is null)
+			{
+				throw new ArgumentException("Task name is required unless you use --since to backdate the current task.");
+			}
+
+			effectiveTaskName = _reportService.GetCurrentState().CurrentTask;
+		}
+
+		WriteLines([_reportService.SetTask(effectiveTaskName, since).Message]);
 		return 0;
 	}
 
@@ -79,12 +97,13 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	private IReadOnlyList<string> FormatStatus(TrackerState state, TimetrackSnapshot todaySnapshot)
+	private IReadOnlyList<string> FormatStatus(TrackerState state, DateTimeOffset? currentTaskSince, TimetrackSnapshot todaySnapshot)
 	{
 		var lines = new List<string>
 		{
 			"TimeTracker status",
 			$"Current task: {state.CurrentTask}",
+			$"Current task since: {FormatCurrentTaskSince(currentTaskSince)}",
 			$"Recording: {(state.IsRecording ? "active" : "paused")}",
 			$"Working hours: {state.WorkdayStart:HH\\:mm} - {state.WorkdayEnd:HH\\:mm}",
 			$"Working days: Monday-Friday",
@@ -165,6 +184,13 @@ internal sealed class TimeTrackerCli
 		return $"{(int)rounded.TotalHours:00}:{rounded.Minutes:00}";
 	}
 
+	private static string FormatCurrentTaskSince(DateTimeOffset? currentTaskSince)
+	{
+		return currentTaskSince is null
+			? "n/a"
+			: currentTaskSince.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm");
+	}
+
 	private static string PadOrTrim(string value, int width)
 	{
 		if (value.Length > width)
@@ -192,12 +218,40 @@ internal static class CommandFactory
 
 		rootCommand.Add(CreateStatusCommand(app));
 		rootCommand.Add(CreateSetTaskCommand(app));
+		rootCommand.Add(CreateEditIntervalCommand(app));
 		rootCommand.Add(CreateSetHoursCommand(app));
 		rootCommand.Add(CreateStopCommand(app));
 		rootCommand.Add(CreateResumeCommand(app));
 		rootCommand.Add(CreateReportCommand(app));
 
 		return rootCommand;
+	}
+
+	private static Command CreateEditIntervalCommand(TimeTrackerCli app)
+	{
+		var fromOption = new Option<DateTimeOffset>("--from");
+		fromOption.Description = "Interval start as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		fromOption.CustomParser = ParseRequiredMomentOption;
+		fromOption.Required = true;
+
+		var toOption = new Option<DateTimeOffset>("--to");
+		toOption.Description = "Interval end as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		toOption.CustomParser = ParseRequiredMomentOption;
+		toOption.Required = true;
+
+		var taskOption = new Option<string>("--task");
+		taskOption.Description = "Task name to assign to the interval.";
+		taskOption.Required = true;
+
+		var command = new Command("edit-interval", "Assign a bounded past interval to a task without changing the current task.");
+		command.Add(fromOption);
+		command.Add(toOption);
+		command.Add(taskOption);
+		command.SetAction(parseResult => app.EditInterval(
+			parseResult.GetValue(fromOption),
+			parseResult.GetValue(toOption),
+			parseResult.GetValue(taskOption) ?? string.Empty));
+		return command;
 	}
 
 	private static Command CreateReportCommand(TimeTrackerCli app)
@@ -247,14 +301,22 @@ internal static class CommandFactory
 
 	private static Command CreateSetTaskCommand(TimeTrackerCli app)
 	{
-		var taskArgument = new Argument<string>("task-name")
+		var sinceOption = new Option<DateTimeOffset?>("--since");
+		sinceOption.Description = "Backdate the start of the task using HH:mm for today or yyyy-MM-ddTHH:mm.";
+		sinceOption.CustomParser = ParseOptionalMomentOption;
+
+		var taskArgument = new Argument<string?>("task-name")
 		{
 			Description = "Task name to make current."
 		};
+		taskArgument.Arity = ArgumentArity.ZeroOrOne;
 
 		var command = new Command("set-task", "Set the current task.");
+		command.Add(sinceOption);
 		command.Add(taskArgument);
-		command.SetAction(parseResult => app.SetTask(parseResult.GetValue(taskArgument) ?? string.Empty));
+		command.SetAction(parseResult => app.SetTask(
+			parseResult.GetValue(taskArgument),
+			parseResult.GetValue(sinceOption)));
 		return command;
 	}
 
@@ -289,9 +351,41 @@ internal static class CommandFactory
 		return null;
 	}
 
-	private static TimeOnly ParseTimeArgument(ArgumentResult argumentResult)
+	private static DateTimeOffset? ParseOptionalMomentOption(ArgumentResult argumentResult)
+	{
+		if (argumentResult.Tokens.Count == 0)
+		{
+			return null;
+		}
+
+		return TryParseMoment(argumentResult.Tokens.Single().Value, out var timestamp)
+			? timestamp
+			: AddMomentParseError(argumentResult);
+	}
+
+	private static DateTimeOffset ParseRequiredMomentOption(ArgumentResult argumentResult)
+	{
+		if (argumentResult.Tokens.Count == 0)
+		{
+			argumentResult.AddError("Missing timestamp. Use HH:mm for today or yyyy-MM-ddTHH:mm.");
+			return default;
+		}
+
+		return TryParseMoment(argumentResult.Tokens.Single().Value, out var timestamp)
+			? timestamp
+			: AddMomentParseError(argumentResult) ?? default;
+	}
+
+	private static DateTimeOffset? AddMomentParseError(ArgumentResult argumentResult)
 	{
 		var rawValue = argumentResult.Tokens.Single().Value;
+		argumentResult.AddError($"Invalid timestamp '{rawValue}'. Use HH:mm for today or yyyy-MM-ddTHH:mm.");
+		return null;
+	}
+
+	private static TimeOnly ParseTimeArgument(ArgumentResult argumentResult)
+	{
+		var rawValue = NormalizeTimeSeparators(argumentResult.Tokens.Single().Value);
 		if (TimeOnly.TryParseExact(rawValue, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
 		{
 			return time;
@@ -299,5 +393,39 @@ internal static class CommandFactory
 
 		argumentResult.AddError($"Invalid time '{rawValue}'. Use HH:mm.");
 		return default;
+	}
+
+	private static bool TryParseMoment(string rawValue, out DateTimeOffset timestamp)
+	{
+		rawValue = NormalizeTimeSeparators(rawValue);
+
+		if (TimeOnly.TryParseExact(rawValue, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+		{
+			var today = DateOnly.FromDateTime(DateTime.Now);
+			timestamp = new DateTimeOffset(today.ToDateTime(time, DateTimeKind.Local));
+			return true;
+		}
+
+		var formats = new[]
+		{
+			"yyyy-MM-ddTHH:mm",
+			"yyyy-MM-dd HH:mm",
+			"yyyy-MM-ddTHH:mm:ss",
+			"yyyy-MM-dd HH:mm:ss"
+		};
+
+		if (DateTime.TryParseExact(rawValue, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDateTime))
+		{
+			timestamp = new DateTimeOffset(DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Local));
+			return true;
+		}
+
+		timestamp = default;
+		return false;
+	}
+
+	private static string NormalizeTimeSeparators(string rawValue)
+	{
+		return rawValue.Replace(';', ':');
 	}
 }

@@ -8,6 +8,7 @@ internal sealed class DailyTaskReportService
 	private static readonly TimeOnly DefaultWorkdayStart = new(9, 0);
 
 	private const string InitializedEvent = "INITIALIZED";
+	private const string IntervalEditedEvent = "INTERVAL_EDITED";
 	private const string RecordingResumedEvent = "RECORDING_RESUMED";
 	private const string RecordingStoppedEvent = "RECORDING_STOPPED";
 	private const string TaskSetEvent = "TASK_SET";
@@ -49,21 +50,52 @@ internal sealed class DailyTaskReportService
 		return new TrackerMutationResult(true, "Recording resumed.", updatedState);
 	}
 
-	public TrackerMutationResult SetTask(string taskName)
+	public TrackerMutationResult EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
+	{
+		if (to <= from)
+		{
+			throw new ArgumentException("Edited interval end must be later than start.");
+		}
+
+		var now = DateTimeOffset.Now;
+		var state = EnsureInitialized(now);
+		var normalizedTask = NormalizeTaskName(taskName);
+		AppendIntervalCorrection(state, now, from, to, normalizedTask);
+		return new TrackerMutationResult(true, $"Corrected interval {FormatInterval(from, to)} to {normalizedTask}.", state);
+	}
+
+	public TrackerMutationResult SetTask(string taskName, DateTimeOffset? since = null)
 	{
 		var now = DateTimeOffset.Now;
 		var state = EnsureInitialized(now);
 		var normalizedTask = NormalizeTaskName(taskName);
+		var taskChanged = !string.Equals(state.CurrentTask, normalizedTask, StringComparison.Ordinal);
+		var updatedState = taskChanged ? state with { CurrentTask = normalizedTask } : state;
 
-		if (string.Equals(state.CurrentTask, normalizedTask, StringComparison.Ordinal))
+		if (since is not null)
 		{
-			return new TrackerMutationResult(false, $"Current task remains '{state.CurrentTask}'.", state);
+			if (since.Value >= now)
+			{
+				throw new ArgumentException("The --since time must be earlier than now.");
+			}
+
+			AppendIntervalCorrection(updatedState, now, since.Value, now, normalizedTask);
 		}
 
-		var updatedState = state with { CurrentTask = normalizedTask };
+		if (!taskChanged)
+		{
+			var unchangedMessage = since is null
+				? $"Current task remains '{state.CurrentTask}'."
+				: $"Current task remains '{state.CurrentTask}'. Corrected interval {FormatInterval(since.Value, now)}.";
+			return new TrackerMutationResult(since is not null, unchangedMessage, state);
+		}
+
 		SaveState(updatedState);
 		AppendEvent(TaskSetEvent, updatedState, now);
-		return new TrackerMutationResult(true, $"Current task: {updatedState.CurrentTask}", updatedState);
+		var changedMessage = since is null
+			? $"Current task: {updatedState.CurrentTask}"
+			: $"Current task: {updatedState.CurrentTask}. Corrected interval {FormatInterval(since.Value, now)}.";
+		return new TrackerMutationResult(true, changedMessage, updatedState);
 	}
 
 	public TrackerMutationResult SetWorkingHours(TimeOnly start, TimeOnly end)
@@ -103,6 +135,23 @@ internal sealed class DailyTaskReportService
 		return new TrackerMutationResult(true, "Recording paused.", updatedState);
 	}
 
+	public DateTimeOffset? GetCurrentTaskSince(DateTimeOffset now)
+	{
+		var currentState = GetCurrentState();
+		var today = DateOnly.FromDateTime(now.LocalDateTime.Date);
+		var segments = BuildSegments(AtLocal(today, TimeOnly.MinValue), now, now);
+		var activeSegment = segments.LastOrDefault(segment => segment.End == now);
+
+		if (activeSegment is null)
+		{
+			return null;
+		}
+
+		return activeSegment.TaskName.Equals(currentState.CurrentTask, StringComparison.OrdinalIgnoreCase)
+			? activeSegment.Start
+			: null;
+	}
+
 	public TimetrackSnapshot BuildRangeSummary(DateOnly start, DateOnly end, DateTimeOffset now)
 	{
 		if (end < start)
@@ -114,32 +163,11 @@ internal sealed class DailyTaskReportService
 		var rangeEndExclusive = AtLocal(end.AddDays(1), TimeOnly.MinValue);
 		var cappedRangeEnd = Min(rangeEndExclusive, now);
 		var totals = new Dictionary<string, TimeSpan>(StringComparer.OrdinalIgnoreCase);
+		var segments = BuildSegments(rangeStart, cappedRangeEnd, now);
 
-		if (cappedRangeEnd > rangeStart)
+		foreach (var segment in segments)
 		{
-			var events = ReadEvents()
-				.Where(static trackerEvent => trackerEvent.State.TrackingStartedAt is not null)
-				.OrderBy(static trackerEvent => trackerEvent.Timestamp)
-				.ToList();
-
-			if (events.Count == 0)
-			{
-				var fallbackState = GetCurrentState();
-				if (fallbackState.TrackingStartedAt is not null)
-				{
-					events.Add(new TrackerEvent(fallbackState.TrackingStartedAt.Value, InitializedEvent, fallbackState));
-				}
-			}
-
-			for (var index = 0; index < events.Count; index++)
-			{
-				var segmentStart = Max(events[index].Timestamp, rangeStart);
-				var segmentEnd = index + 1 < events.Count
-					? Min(events[index + 1].Timestamp, cappedRangeEnd)
-					: cappedRangeEnd;
-
-				AddSegmentDurations(totals, events[index].State, segmentStart, segmentEnd);
-			}
+			AddDuration(totals, segment.TaskName, segment.End - segment.Start);
 		}
 
 		var entries = totals
@@ -178,7 +206,28 @@ internal sealed class DailyTaskReportService
 		totals[normalizedTask] = existing + duration;
 	}
 
-	private static void AddSegmentDurations(IDictionary<string, TimeSpan> totals, TrackerState state, DateTimeOffset segmentStart, DateTimeOffset segmentEnd)
+	private static void AddSegment(List<WorkSegment> segments, string taskName, DateTimeOffset segmentStart, DateTimeOffset segmentEnd)
+	{
+		if (segmentEnd <= segmentStart)
+		{
+			return;
+		}
+
+		var normalizedTask = NormalizeTaskName(taskName);
+		if (segments.Count > 0)
+		{
+			var last = segments[^1];
+			if (last.TaskName.Equals(normalizedTask, StringComparison.OrdinalIgnoreCase) && last.End == segmentStart)
+			{
+				segments[^1] = last with { End = segmentEnd };
+				return;
+			}
+		}
+
+		segments.Add(new WorkSegment(segmentStart, segmentEnd, normalizedTask));
+	}
+
+	private static void AddStateSegments(List<WorkSegment> segments, TrackerState state, DateTimeOffset segmentStart, DateTimeOffset segmentEnd)
 	{
 		if (!state.IsRecording || segmentEnd <= segmentStart)
 		{
@@ -200,7 +249,7 @@ internal sealed class DailyTaskReportService
 
 				if (effectiveEnd > effectiveStart)
 				{
-					AddDuration(totals, state.CurrentTask, effectiveEnd - effectiveStart);
+					AddSegment(segments, state.CurrentTask, effectiveStart, effectiveEnd);
 				}
 			}
 
@@ -208,10 +257,34 @@ internal sealed class DailyTaskReportService
 		}
 	}
 
-	private void AppendEvent(string name, TrackerState state, DateTimeOffset timestamp)
+	private static List<WorkSegment> ApplyCorrections(List<WorkSegment> baseSegments, IReadOnlyList<TrackerEvent> events, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
 	{
-		var serializedEvent = JsonSerializer.Serialize(new TrackerEvent(timestamp, name, state));
+		var segments = baseSegments;
+
+		foreach (var trackerEvent in events.Where(static item => item.Correction is not null).OrderBy(static item => item.Timestamp))
+		{
+			foreach (var correctionSegment in BuildCorrectionSegments(trackerEvent, rangeStart, rangeEnd))
+			{
+				segments = OverlaySegment(segments, correctionSegment);
+			}
+		}
+
+		return MergeSegments(segments);
+	}
+
+	private void AppendEvent(string name, TrackerState state, DateTimeOffset timestamp, IntervalCorrection? correction = null)
+	{
+		var serializedEvent = JsonSerializer.Serialize(new TrackerEvent(timestamp, name, state, correction));
 		File.AppendAllText(EventLogPath, serializedEvent + Environment.NewLine);
+	}
+
+	private void AppendIntervalCorrection(TrackerState state, DateTimeOffset recordedAt, DateTimeOffset from, DateTimeOffset to, string taskName)
+	{
+		AppendEvent(
+			IntervalEditedEvent,
+			state,
+			recordedAt,
+			new IntervalCorrection(from, to, NormalizeTaskName(taskName)));
 	}
 
 	private TrackerState EnsureInitialized(DateTimeOffset now)
@@ -234,9 +307,184 @@ internal sealed class DailyTaskReportService
 		return TrackerState.Default with { TrackingStartedAt = initializationTimestamp };
 	}
 
+	private static IReadOnlyList<WorkSegment> BuildCorrectionSegments(TrackerEvent trackerEvent, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
+	{
+		if (trackerEvent.Correction is null)
+		{
+			return [];
+		}
+
+		var correction = trackerEvent.Correction;
+		var correctionStart = Max(correction.From, rangeStart);
+		var correctionEnd = Min(correction.To, rangeEnd);
+		var segments = new List<WorkSegment>();
+
+		if (correctionEnd <= correctionStart)
+		{
+			return segments;
+		}
+
+		var cursor = correctionStart;
+		while (cursor < correctionEnd)
+		{
+			var currentDate = DateOnly.FromDateTime(cursor.LocalDateTime.Date);
+			var dayEnd = Min(correctionEnd, AtLocal(currentDate.AddDays(1), TimeOnly.MinValue));
+
+			if (IsWorkingDay(currentDate.DayOfWeek))
+			{
+				var workdayStart = AtLocal(currentDate, trackerEvent.State.WorkdayStart);
+				var workdayEnd = AtLocal(currentDate, trackerEvent.State.WorkdayEnd);
+				var effectiveStart = Max(cursor, workdayStart);
+				var effectiveEnd = Min(dayEnd, workdayEnd);
+
+				if (effectiveEnd > effectiveStart)
+				{
+					AddSegment(segments, correction.TaskName, effectiveStart, effectiveEnd);
+				}
+			}
+
+			cursor = dayEnd;
+		}
+
+		return segments;
+	}
+
+	private static string FormatInterval(DateTimeOffset from, DateTimeOffset to)
+	{
+		return $"{from.LocalDateTime:yyyy-MM-dd HH:mm} .. {to.LocalDateTime:yyyy-MM-dd HH:mm}";
+	}
+
+	private static IReadOnlyList<TrackerEvent> GetStateTimelineEvents(IReadOnlyList<TrackerEvent> events, DateTimeOffset now)
+	{
+		var stateEvents = events
+			.Where(static trackerEvent => trackerEvent.State.TrackingStartedAt is not null && IsStateTimelineEvent(trackerEvent.Name))
+			.ToList();
+
+		if (stateEvents.Count > 0)
+		{
+			return stateEvents;
+		}
+
+		var fallbackState = TrackerState.Default with { TrackingStartedAt = Min(now, AtLocal(DateOnly.FromDateTime(now.LocalDateTime.Date), DefaultWorkdayStart)) };
+		return [new TrackerEvent(fallbackState.TrackingStartedAt!.Value, InitializedEvent, fallbackState)];
+	}
+
+	private static bool IsStateTimelineEvent(string eventName)
+	{
+		return eventName is InitializedEvent or RecordingResumedEvent or RecordingStoppedEvent or TaskSetEvent or WorkingHoursSetEvent;
+	}
+
+	private List<WorkSegment> BuildSegments(DateTimeOffset rangeStart, DateTimeOffset rangeEnd, DateTimeOffset now)
+	{
+		if (rangeEnd <= rangeStart)
+		{
+			return [];
+		}
+
+		var events = ReadEvents()
+			.OrderBy(static trackerEvent => trackerEvent.Timestamp)
+			.ToList();
+		var stateEvents = GetStateTimelineEvents(events, now);
+		var segments = BuildBaseSegments(stateEvents, rangeStart, rangeEnd);
+		return ApplyCorrections(segments, events, rangeStart, rangeEnd);
+	}
+
+	private static List<WorkSegment> BuildBaseSegments(IReadOnlyList<TrackerEvent> stateEvents, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
+	{
+		var segments = new List<WorkSegment>();
+
+		for (var index = 0; index < stateEvents.Count; index++)
+		{
+			var segmentStart = Max(stateEvents[index].Timestamp, rangeStart);
+			var segmentEnd = index + 1 < stateEvents.Count
+				? Min(stateEvents[index + 1].Timestamp, rangeEnd)
+				: rangeEnd;
+
+			AddStateSegments(segments, stateEvents[index].State, segmentStart, segmentEnd);
+		}
+
+		return segments;
+	}
+
 	private static bool IsWorkingDay(DayOfWeek dayOfWeek)
 	{
 		return dayOfWeek is >= DayOfWeek.Monday and <= DayOfWeek.Friday;
+	}
+
+	private static List<WorkSegment> MergeSegments(IEnumerable<WorkSegment> segments)
+	{
+		var orderedSegments = segments.OrderBy(static item => item.Start).ThenBy(static item => item.End).ToList();
+		if (orderedSegments.Count == 0)
+		{
+			return orderedSegments;
+		}
+
+		var merged = new List<WorkSegment> { orderedSegments[0] };
+		for (var index = 1; index < orderedSegments.Count; index++)
+		{
+			var current = orderedSegments[index];
+			var last = merged[^1];
+
+			if (last.TaskName.Equals(current.TaskName, StringComparison.OrdinalIgnoreCase) && last.End >= current.Start)
+			{
+				merged[^1] = last with { End = Max(last.End, current.End) };
+				continue;
+			}
+
+			merged.Add(current);
+		}
+
+		return merged;
+	}
+
+	private static List<WorkSegment> OverlaySegment(List<WorkSegment> segments, WorkSegment overlay)
+	{
+		var updatedSegments = new List<WorkSegment>();
+		var inserted = false;
+
+		foreach (var segment in segments.OrderBy(static item => item.Start).ThenBy(static item => item.End))
+		{
+			if (segment.End <= overlay.Start)
+			{
+				updatedSegments.Add(segment);
+				continue;
+			}
+
+			if (segment.Start >= overlay.End)
+			{
+				if (!inserted)
+				{
+					updatedSegments.Add(overlay);
+					inserted = true;
+				}
+
+				updatedSegments.Add(segment);
+				continue;
+			}
+
+			if (segment.Start < overlay.Start)
+			{
+				updatedSegments.Add(segment with { End = overlay.Start });
+			}
+
+			if (!inserted)
+			{
+				updatedSegments.Add(overlay);
+				inserted = true;
+			}
+
+			if (segment.End > overlay.End)
+			{
+				updatedSegments.Add(segment with { Start = overlay.End });
+			}
+		}
+
+		if (!inserted)
+		{
+			updatedSegments.Add(overlay);
+		}
+
+		return MergeSegments(updatedSegments);
 	}
 
 	private TrackerState? LoadState()
@@ -334,7 +582,9 @@ internal sealed class DailyTaskReportService
 	}
 }
 
-internal sealed record TrackerEvent(DateTimeOffset Timestamp, string Name, TrackerState State);
+internal sealed record TrackerEvent(DateTimeOffset Timestamp, string Name, TrackerState State, IntervalCorrection? Correction = null);
+
+internal sealed record IntervalCorrection(DateTimeOffset From, DateTimeOffset To, string TaskName);
 
 internal sealed record TrackerMutationResult(bool Changed, string Message, TrackerState State);
 
@@ -346,3 +596,5 @@ internal sealed record TrackerState(string CurrentTask, TimeOnly WorkdayStart, T
 internal sealed record TimetrackSnapshot(string Title, string SourceDescription, IReadOnlyList<TaskDurationEntry> Entries, TimeSpan Total);
 
 internal sealed record TaskDurationEntry(string TaskName, TimeSpan Duration);
+
+internal sealed record WorkSegment(DateTimeOffset Start, DateTimeOffset End, string TaskName);
