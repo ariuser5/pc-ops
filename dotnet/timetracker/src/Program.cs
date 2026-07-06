@@ -63,6 +63,53 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
+	public int SetBreakFromApi(DateTimeOffset from, DateTimeOffset to, bool daily)
+	{
+		if (daily)
+		{
+			WriteLines([_reportService.SetRecurringBreak(TimeOnly.FromDateTime(from.LocalDateTime), TimeOnly.FromDateTime(to.LocalDateTime)).Message]);
+			return 0;
+		}
+
+		return SetBreak(from, to);
+	}
+
+	public int ListBreaks(bool dailyOnly)
+	{
+		var now = DateTimeOffset.Now;
+		var today = DateOnly.FromDateTime(now.LocalDateTime.Date);
+		WriteLines(FormatBreakList(_reportService.GetBreakList(today, now), dailyOnly));
+		return 0;
+	}
+
+	public int RemoveBreak(DateTimeOffset from, DateTimeOffset to)
+	{
+		WriteLines([_reportService.RemoveBreak(from, to).Message]);
+		return 0;
+	}
+
+	public int RemoveBreakFromApi(DateTimeOffset? from, DateTimeOffset? to, string? breakRuleId)
+	{
+		if (!string.IsNullOrWhiteSpace(breakRuleId))
+		{
+			if (from is not null || to is not null)
+			{
+				throw new ArgumentException("Break removal accepts either a recurring break id or a --from/--to interval, but not both.");
+			}
+
+			WriteLines([_reportService.RemoveRecurringBreak(breakRuleId).Message]);
+			return 0;
+		}
+
+		if (from is null || to is null)
+		{
+			throw new ArgumentException("Break removal requires either a recurring break id or both --from and --to.");
+		}
+
+		WriteLines([_reportService.RemoveBreak(from.Value, to.Value).Message]);
+		return 0;
+	}
+
 	public int SetTaskFromApi(string? taskName, DateTimeOffset? from, DateTimeOffset? to)
 	{
 		if (to is not null && from is null)
@@ -178,6 +225,46 @@ internal sealed class TimeTrackerCli
 			.ToList();
 		var totalBreak = breakIntervals.Aggregate(TimeSpan.Zero, static (sum, item) => sum + item.Duration);
 		return $"{string.Join(", ", items)} | total {FormatElapsed(totalBreak)}";
+	}
+
+	private static IReadOnlyList<string> FormatBreakList(BreakListSnapshot snapshot, bool dailyOnly)
+	{
+		var lines = new List<string> { "Breaks" };
+
+		if (!dailyOnly)
+		{
+			lines.Add($"Effective for {snapshot.Date:yyyy-MM-dd}");
+			if (snapshot.EffectiveBreaks.Count == 0)
+			{
+				lines.Add("No breaks recorded for the selected day.");
+			}
+			else
+			{
+				for (var index = 0; index < snapshot.EffectiveBreaks.Count; index++)
+				{
+					var item = snapshot.EffectiveBreaks[index];
+					lines.Add($"{index + 1}. {item.Start.LocalDateTime:HH:mm}-{item.End.LocalDateTime:HH:mm} ({FormatElapsed(item.Duration)})");
+				}
+			}
+
+			lines.Add(string.Empty);
+		}
+
+		lines.Add("Recurring daily breaks");
+		if (snapshot.RecurringBreakRules.Count == 0)
+		{
+			lines.Add("No recurring daily breaks configured.");
+		}
+		else
+		{
+			foreach (var rule in snapshot.RecurringBreakRules)
+			{
+				var duration = rule.To - rule.From;
+				lines.Add($"{rule.Id}  {rule.From:HH\\:mm}-{rule.To:HH\\:mm} ({FormatElapsed(duration)})");
+			}
+		}
+
+		return lines;
 	}
 
 	private static IReadOnlyList<string> FormatStatusSummary(TimetrackSnapshot snapshot)
@@ -342,8 +429,21 @@ internal static class CommandFactory
 	private static Command CreateBreakCommand(TimeTrackerCli app)
 	{
 		var command = new Command("break", "Manage break intervals.");
+		command.Add(CreateBreakListCommand(app));
+		command.Add(CreateBreakRemoveCommand(app));
 		command.Add(CreateBreakSetCommand(app));
 		command.Add(CreateBreakAddCommand(app));
+		return command;
+	}
+
+	private static Command CreateBreakListCommand(TimeTrackerCli app)
+	{
+		var dailyOption = new Option<bool>("--daily");
+		dailyOption.Description = "Show only recurring daily break rules.";
+
+		var command = new Command("list", "List today's effective breaks and recurring daily break rules.");
+		command.Add(dailyOption);
+		command.SetAction(parseResult => app.ListBreaks(parseResult.GetValue(dailyOption)));
 		return command;
 	}
 
@@ -359,12 +459,44 @@ internal static class CommandFactory
 		toOption.CustomParser = ParseRequiredMomentOption;
 		toOption.Required = true;
 
+		var dailyOption = new Option<bool>("--daily");
+		dailyOption.Description = "Treat the break as a recurring daily break rule.";
+
 		var command = new Command("set", "Set a break interval by subtracting it from tracked work time.");
 		command.Add(fromOption);
 		command.Add(toOption);
-		command.SetAction(parseResult => app.SetBreak(
+		command.Add(dailyOption);
+		command.SetAction(parseResult => app.SetBreakFromApi(
 			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption)));
+			parseResult.GetValue(toOption),
+			parseResult.GetValue(dailyOption)));
+		return command;
+	}
+
+	private static Command CreateBreakRemoveCommand(TimeTrackerCli app)
+	{
+		var idArgument = new Argument<string?>("break-id")
+		{
+			Description = "Recurring daily break rule id from 'break list'."
+		};
+		idArgument.Arity = ArgumentArity.ZeroOrOne;
+
+		var fromOption = new Option<DateTimeOffset?>("--from");
+		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		fromOption.CustomParser = ParseOptionalMomentOption;
+
+		var toOption = new Option<DateTimeOffset?>("--to");
+		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
+		toOption.CustomParser = ParseOptionalMomentOption;
+
+		var command = new Command("remove", "Remove a one-off break interval by --from/--to, or remove a recurring daily break rule by id.");
+		command.Add(idArgument);
+		command.Add(fromOption);
+		command.Add(toOption);
+		command.SetAction(parseResult => app.RemoveBreakFromApi(
+			parseResult.GetValue(fromOption),
+			parseResult.GetValue(toOption),
+			parseResult.GetValue(idArgument)));
 		return command;
 	}
 

@@ -9,6 +9,9 @@ internal sealed class DailyTaskReportService
 	private static readonly TimeOnly DefaultWorkdayStart = new(9, 0);
 
 	private const string InitializedEvent = "INITIALIZED";
+	private const string BreakDailyRemoveEvent = "BREAK_DAILY_REMOVE";
+	private const string BreakDailySetEvent = "BREAK_DAILY_SET";
+	private const string BreakRemoveEvent = "BREAK_REMOVE";
 	private const string BreakSetEvent = "BREAK_SET";
 	private const string IntervalEditedEvent = "INTERVAL_EDITED";
 	private const string RecordingResumedEvent = "RECORDING_RESUMED";
@@ -109,6 +112,53 @@ internal sealed class DailyTaskReportService
 		var state = EnsureInitialized(now);
 		AppendBreak(state, now, from, to);
 		return new TrackerMutationResult(true, $"Recorded break {FormatInterval(from, to)}.", state);
+	}
+
+	public TrackerMutationResult RemoveBreak(DateTimeOffset from, DateTimeOffset to)
+	{
+		if (to <= from)
+		{
+			throw new ArgumentException("Break end must be later than start.");
+		}
+
+		var now = DateTimeOffset.Now;
+		var state = EnsureInitialized(now);
+		AppendBreakRemoval(state, now, from, to);
+		return new TrackerMutationResult(true, $"Removed break {FormatInterval(from, to)}.", state);
+	}
+
+	public TrackerMutationResult SetRecurringBreak(TimeOnly from, TimeOnly to)
+	{
+		if (to <= from)
+		{
+			throw new ArgumentException("Recurring break end must be later than start.");
+		}
+
+		var now = DateTimeOffset.Now;
+		var state = EnsureInitialized(now);
+		var breakRule = new RecurringBreakRule(GenerateRecurringBreakRuleId(), from, to);
+		AppendRecurringBreak(state, now, breakRule);
+		return new TrackerMutationResult(true, $"Recorded daily break {FormatTimeRange(from, to)} with id {breakRule.Id}.", state);
+	}
+
+	public TrackerMutationResult RemoveRecurringBreak(string breakRuleId)
+	{
+		if (string.IsNullOrWhiteSpace(breakRuleId))
+		{
+			throw new ArgumentException("Recurring break id is required.");
+		}
+
+		var now = DateTimeOffset.Now;
+		var state = EnsureInitialized(now);
+		var normalizedBreakRuleId = breakRuleId.Trim();
+		var recurringRules = BuildActiveRecurringBreakRules();
+		if (!recurringRules.ContainsKey(normalizedBreakRuleId))
+		{
+			throw new ArgumentException($"No recurring break found with id '{normalizedBreakRuleId}'. Use 'break list' to inspect active recurring breaks.");
+		}
+
+		AppendRecurringBreakRemoval(state, now, normalizedBreakRuleId);
+		return new TrackerMutationResult(true, $"Removed daily break {normalizedBreakRuleId}.", state);
 	}
 
 	public TrackerMutationResult SetTask(string taskName, DateTimeOffset? since = null)
@@ -217,14 +267,24 @@ internal sealed class DailyTaskReportService
 			return [];
 		}
 
-		var breakSegments = ReadEvents()
-			.Where(static trackerEvent => trackerEvent.Name == BreakSetEvent)
-			.OrderBy(static trackerEvent => trackerEvent.Timestamp)
-			.SelectMany(trackerEvent => BuildCorrectionSegments(trackerEvent, rangeStart, rangeEnd))
-			.ToList();
-
-		return MergeSegments(breakSegments)
+		return BuildEffectiveBreakSegments(rangeStart, rangeEnd)
 			.Select(static segment => new BreakIntervalEntry(segment.Start, segment.End))
+			.ToList();
+	}
+
+	public BreakListSnapshot GetBreakList(DateOnly date, DateTimeOffset now)
+	{
+		return new BreakListSnapshot(date, GetBreakIntervals(date, now), GetRecurringBreakRules());
+	}
+
+	public IReadOnlyList<RecurringBreakRuleEntry> GetRecurringBreakRules()
+	{
+		return BuildActiveRecurringBreakRules()
+			.Values
+			.OrderBy(static rule => rule.From)
+			.ThenBy(static rule => rule.To)
+			.ThenBy(static rule => rule.Id, StringComparer.OrdinalIgnoreCase)
+			.Select(static rule => new RecurringBreakRuleEntry(rule.Id, rule.From, rule.To))
 			.ToList();
 	}
 
@@ -333,12 +393,12 @@ internal sealed class DailyTaskReportService
 		}
 	}
 
-	private static List<WorkSegment> ApplyCorrections(List<WorkSegment> baseSegments, IReadOnlyList<TrackerEvent> events, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, bool applyBreaks)
+	private static List<WorkSegment> ApplyCorrections(List<WorkSegment> baseSegments, IReadOnlyList<TrackerEvent> events, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
 	{
 		var segments = baseSegments;
 
 		var correctionEvents = events
-			.Where(static item => item.Correction is not null && item.Name != BreakSetEvent)
+			.Where(static item => item.Correction is not null && !IsBreakEvent(item.Name))
 			.OrderBy(static item => item.Timestamp);
 
 		foreach (var trackerEvent in correctionEvents)
@@ -349,27 +409,12 @@ internal sealed class DailyTaskReportService
 			}
 		}
 
-		if (applyBreaks)
-		{
-			var breakEvents = events
-				.Where(static item => item.Name == BreakSetEvent && item.Correction is not null)
-				.OrderBy(static item => item.Timestamp);
-
-			foreach (var trackerEvent in breakEvents)
-			{
-				foreach (var breakSegment in BuildCorrectionSegments(trackerEvent, rangeStart, rangeEnd))
-				{
-					segments = RemoveSegment(segments, breakSegment);
-				}
-			}
-		}
-
 		return MergeSegments(segments);
 	}
 
-	private void AppendEvent(string name, TrackerState state, DateTimeOffset timestamp, IntervalCorrection? correction = null)
+	private void AppendEvent(string name, TrackerState state, DateTimeOffset timestamp, IntervalCorrection? correction = null, RecurringBreakRule? breakRule = null, BreakRuleReference? breakRuleReference = null)
 	{
-		var serializedEvent = JsonSerializer.Serialize(new TrackerEvent(timestamp, name, state, correction));
+		var serializedEvent = JsonSerializer.Serialize(new TrackerEvent(timestamp, name, state, correction, breakRule, breakRuleReference));
 		File.AppendAllText(EventLogPath, serializedEvent + Environment.NewLine);
 	}
 
@@ -389,6 +434,33 @@ internal sealed class DailyTaskReportService
 			state,
 			recordedAt,
 			new IntervalCorrection(from, to, BreakTaskName));
+	}
+
+	private void AppendBreakRemoval(TrackerState state, DateTimeOffset recordedAt, DateTimeOffset from, DateTimeOffset to)
+	{
+		AppendEvent(
+			BreakRemoveEvent,
+			state,
+			recordedAt,
+			new IntervalCorrection(from, to, BreakTaskName));
+	}
+
+	private void AppendRecurringBreak(TrackerState state, DateTimeOffset recordedAt, RecurringBreakRule breakRule)
+	{
+		AppendEvent(
+			BreakDailySetEvent,
+			state,
+			recordedAt,
+			breakRule: breakRule);
+	}
+
+	private void AppendRecurringBreakRemoval(TrackerState state, DateTimeOffset recordedAt, string breakRuleId)
+	{
+		AppendEvent(
+			BreakDailyRemoveEvent,
+			state,
+			recordedAt,
+			breakRuleReference: new BreakRuleReference(breakRuleId));
 	}
 
 	private TrackerState EnsureInitialized(DateTimeOffset now)
@@ -456,6 +528,16 @@ internal sealed class DailyTaskReportService
 	private static string FormatInterval(DateTimeOffset from, DateTimeOffset to)
 	{
 		return $"{from.LocalDateTime:yyyy-MM-dd HH:mm} .. {to.LocalDateTime:yyyy-MM-dd HH:mm}";
+	}
+
+	private static string FormatTimeRange(TimeOnly from, TimeOnly to)
+	{
+		return $"{from:HH\\:mm} .. {to:HH\\:mm}";
+	}
+
+	private static string GenerateRecurringBreakRuleId()
+	{
+		return Guid.NewGuid().ToString("N")[..8];
 	}
 
 	private CurrentTaskContext? GetCurrentTaskContext(string currentTaskName, DateTimeOffset now)
@@ -528,6 +610,113 @@ internal sealed class DailyTaskReportService
 		return eventName is InitializedEvent or RecordingResumedEvent or RecordingStoppedEvent or TaskSetEvent or WorkingHoursSetEvent;
 	}
 
+	private List<WorkSegment> BuildEffectiveBreakSegments(DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
+	{
+		var segments = BuildRecurringBreakSegments(rangeStart, rangeEnd);
+		var breakEvents = ReadEvents()
+			.Where(static trackerEvent => trackerEvent.Name == BreakSetEvent || trackerEvent.Name == BreakRemoveEvent)
+			.OrderBy(static trackerEvent => trackerEvent.Timestamp);
+
+		foreach (var trackerEvent in breakEvents)
+		{
+			var breakSegments = BuildCorrectionSegments(trackerEvent, rangeStart, rangeEnd);
+			foreach (var breakSegment in breakSegments)
+			{
+				segments = IsBreakSetEvent(trackerEvent.Name)
+					? OverlaySegment(segments, breakSegment)
+					: RemoveSegment(segments, breakSegment);
+			}
+		}
+
+		return MergeSegments(segments);
+	}
+
+	private Dictionary<string, RecurringBreakRule> BuildActiveRecurringBreakRules()
+	{
+		var activeRules = new Dictionary<string, RecurringBreakRule>(StringComparer.OrdinalIgnoreCase);
+		var recurringEvents = ReadEvents()
+			.Where(static trackerEvent => trackerEvent.Name is BreakDailySetEvent or BreakDailyRemoveEvent)
+			.OrderBy(static trackerEvent => trackerEvent.Timestamp);
+
+		foreach (var trackerEvent in recurringEvents)
+		{
+			switch (trackerEvent.Name)
+			{
+				case BreakDailySetEvent when trackerEvent.BreakRule is not null:
+					activeRules[trackerEvent.BreakRule.Id] = trackerEvent.BreakRule;
+					break;
+				case BreakDailyRemoveEvent when trackerEvent.BreakRuleReference is not null:
+					activeRules.Remove(trackerEvent.BreakRuleReference.Id);
+					break;
+			}
+		}
+
+		return activeRules;
+	}
+
+	private List<WorkSegment> BuildRecurringBreakSegments(DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
+	{
+		if (rangeEnd <= rangeStart)
+		{
+			return [];
+		}
+
+		var segments = new List<WorkSegment>();
+		var activeRules = new Dictionary<string, ActiveRecurringBreakRule>(StringComparer.OrdinalIgnoreCase);
+		var recurringEvents = ReadEvents()
+			.Where(static trackerEvent => trackerEvent.Name is BreakDailySetEvent or BreakDailyRemoveEvent)
+			.OrderBy(static trackerEvent => trackerEvent.Timestamp);
+
+		foreach (var trackerEvent in recurringEvents)
+		{
+			var eventDate = DateOnly.FromDateTime(trackerEvent.Timestamp.LocalDateTime.Date);
+			switch (trackerEvent.Name)
+			{
+				case BreakDailySetEvent when trackerEvent.BreakRule is not null:
+					activeRules[trackerEvent.BreakRule.Id] = new ActiveRecurringBreakRule(trackerEvent.BreakRule, eventDate);
+					break;
+				case BreakDailyRemoveEvent when trackerEvent.BreakRuleReference is not null:
+					if (activeRules.Remove(trackerEvent.BreakRuleReference.Id, out var activeRule))
+					{
+						AddRecurringBreakSegments(segments, activeRule, eventDate, rangeStart, rangeEnd);
+					}
+					break;
+			}
+		}
+
+		var rangeEndExclusiveDate = DateOnly.FromDateTime(rangeEnd.LocalDateTime.Date).AddDays(rangeEnd.TimeOfDay == TimeSpan.Zero ? 0 : 1);
+		foreach (var activeRule in activeRules.Values)
+		{
+			AddRecurringBreakSegments(segments, activeRule, rangeEndExclusiveDate, rangeStart, rangeEnd);
+		}
+
+		return MergeSegments(segments);
+	}
+
+	private static void AddRecurringBreakSegments(List<WorkSegment> segments, ActiveRecurringBreakRule activeRule, DateOnly effectiveEndDateExclusive, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
+	{
+		var startDate = Max(activeRule.ActiveFromDate, DateOnly.FromDateTime(rangeStart.LocalDateTime.Date));
+		var endDateExclusive = Min(effectiveEndDateExclusive, DateOnly.FromDateTime(rangeEnd.LocalDateTime.Date).AddDays(rangeEnd.TimeOfDay == TimeSpan.Zero ? 0 : 1));
+
+		for (var date = startDate; date < endDateExclusive; date = date.AddDays(1))
+		{
+			if (!IsWorkingDay(date.DayOfWeek))
+			{
+				continue;
+			}
+
+			var breakStart = AtLocal(date, activeRule.Rule.From);
+			var breakEnd = AtLocal(date, activeRule.Rule.To);
+			var effectiveStart = Max(rangeStart, breakStart);
+			var effectiveEnd = Min(rangeEnd, breakEnd);
+
+			if (effectiveEnd > effectiveStart)
+			{
+				AddSegment(segments, BreakTaskName, effectiveStart, effectiveEnd);
+			}
+		}
+	}
+
 	private List<WorkSegment> BuildSegments(DateTimeOffset rangeStart, DateTimeOffset rangeEnd, DateTimeOffset now, bool applyBreaks = true)
 	{
 		if (rangeEnd <= rangeStart)
@@ -540,7 +729,19 @@ internal sealed class DailyTaskReportService
 			.ToList();
 		var stateEvents = GetStateTimelineEvents(events, now);
 		var segments = BuildBaseSegments(stateEvents, rangeStart, rangeEnd);
-		return ApplyCorrections(segments, events, rangeStart, rangeEnd, applyBreaks);
+		segments = ApplyCorrections(segments, events, rangeStart, rangeEnd);
+
+		if (!applyBreaks)
+		{
+			return segments;
+		}
+
+		foreach (var breakSegment in BuildEffectiveBreakSegments(rangeStart, rangeEnd))
+		{
+			segments = RemoveSegment(segments, breakSegment);
+		}
+
+		return segments;
 	}
 
 	private static List<WorkSegment> BuildBaseSegments(IReadOnlyList<TrackerEvent> stateEvents, DateTimeOffset rangeStart, DateTimeOffset rangeEnd)
@@ -667,6 +868,16 @@ internal sealed class DailyTaskReportService
 		return MergeSegments(updatedSegments);
 	}
 
+	private static bool IsBreakEvent(string eventName)
+	{
+		return eventName is BreakSetEvent or BreakRemoveEvent or BreakDailySetEvent or BreakDailyRemoveEvent;
+	}
+
+	private static bool IsBreakSetEvent(string eventName)
+	{
+		return eventName is BreakSetEvent or BreakDailySetEvent;
+	}
+
 	private TrackerState? LoadState()
 	{
 		var eventState = ReadEvents().LastOrDefault()?.State;
@@ -743,7 +954,17 @@ internal sealed class DailyTaskReportService
 		return left >= right ? left : right;
 	}
 
+	private static DateOnly Max(DateOnly left, DateOnly right)
+	{
+		return left >= right ? left : right;
+	}
+
 	private static DateTimeOffset Min(DateTimeOffset left, DateTimeOffset right)
+	{
+		return left <= right ? left : right;
+	}
+
+	private static DateOnly Min(DateOnly left, DateOnly right)
 	{
 		return left <= right ? left : right;
 	}
@@ -781,9 +1002,13 @@ internal sealed class DailyTaskReportService
 	}
 }
 
-internal sealed record TrackerEvent(DateTimeOffset Timestamp, string Name, TrackerState State, IntervalCorrection? Correction = null);
+internal sealed record TrackerEvent(DateTimeOffset Timestamp, string Name, TrackerState State, IntervalCorrection? Correction = null, RecurringBreakRule? BreakRule = null, BreakRuleReference? BreakRuleReference = null);
 
 internal sealed record IntervalCorrection(DateTimeOffset From, DateTimeOffset To, string TaskName);
+
+internal sealed record RecurringBreakRule(string Id, TimeOnly From, TimeOnly To);
+
+internal sealed record BreakRuleReference(string Id);
 
 internal sealed record TrackerMutationResult(bool Changed, string Message, TrackerState State);
 
@@ -803,8 +1028,14 @@ internal sealed record BreakIntervalEntry(DateTimeOffset Start, DateTimeOffset E
 	public TimeSpan Duration => End - Start;
 }
 
+internal sealed record BreakListSnapshot(DateOnly Date, IReadOnlyList<BreakIntervalEntry> EffectiveBreaks, IReadOnlyList<RecurringBreakRuleEntry> RecurringBreakRules);
+
+internal sealed record RecurringBreakRuleEntry(string Id, TimeOnly From, TimeOnly To);
+
 internal sealed record CurrentTaskContext(DateTimeOffset Start, string? PreviousTaskName);
 
 internal sealed record TaskSegmentContext(DateTimeOffset Start, DateTimeOffset End, string? PreviousTaskName, string? NextTaskName);
+
+internal sealed record ActiveRecurringBreakRule(RecurringBreakRule Rule, DateOnly ActiveFromDate);
 
 internal sealed record StateRefreshResult(bool Changed, string Message);
