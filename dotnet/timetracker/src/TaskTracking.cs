@@ -54,6 +54,11 @@ internal sealed class DailyTaskReportService
 
 	public TrackerMutationResult EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
 	{
+		return SetTaskInterval(taskName, from, to);
+	}
+
+	public TrackerMutationResult SetTaskInterval(string taskName, DateTimeOffset from, DateTimeOffset to)
+	{
 		if (to <= from)
 		{
 			throw new ArgumentException("Edited interval end must be later than start.");
@@ -62,6 +67,14 @@ internal sealed class DailyTaskReportService
 		var now = DateTimeOffset.Now;
 		var state = EnsureInitialized(now);
 		var normalizedTask = NormalizeTaskName(taskName);
+		var taskContext = GetTaskSegmentContext(normalizedTask, from, to, now);
+
+		if (taskContext is not null && from > taskContext.Start)
+		{
+			var resetTask = taskContext.PreviousTaskName ?? DefaultTaskName;
+			AppendIntervalCorrection(state, now, taskContext.Start, from, resetTask);
+		}
+
 		AppendIntervalCorrection(state, now, from, to, normalizedTask);
 		return new TrackerMutationResult(true, $"Corrected interval {FormatInterval(from, to)} to {normalizedTask}.", state);
 	}
@@ -451,6 +464,31 @@ internal sealed class DailyTaskReportService
 		return new CurrentTaskContext(currentSegment.Start, previousSegment?.TaskName);
 	}
 
+	private TaskSegmentContext? GetTaskSegmentContext(string taskName, DateTimeOffset from, DateTimeOffset to, DateTimeOffset now)
+	{
+		var currentState = GetCurrentState();
+		var rangeStart = currentState.TrackingStartedAt ?? CreateInitialState(now).TrackingStartedAt ?? from;
+		var rangeEnd = Max(now, to);
+		var segments = BuildSegments(rangeStart, rangeEnd, rangeEnd, applyBreaks: false)
+			.OrderBy(static segment => segment.Start)
+			.ThenBy(static segment => segment.End)
+			.ToList();
+
+		var matchIndex = segments.FindIndex(segment =>
+			segment.TaskName.Equals(taskName, StringComparison.OrdinalIgnoreCase)
+			&& segment.End > from
+			&& segment.Start < to);
+
+		if (matchIndex < 0)
+		{
+			return null;
+		}
+
+		var previousTaskName = matchIndex > 0 ? segments[matchIndex - 1].TaskName : null;
+		var nextTaskName = matchIndex + 1 < segments.Count ? segments[matchIndex + 1].TaskName : null;
+		return new TaskSegmentContext(segments[matchIndex].Start, segments[matchIndex].End, previousTaskName, nextTaskName);
+	}
+
 	private static IReadOnlyList<TrackerEvent> GetStateTimelineEvents(IReadOnlyList<TrackerEvent> events, DateTimeOffset now)
 	{
 		var stateEvents = events
@@ -728,3 +766,5 @@ internal sealed record BreakIntervalEntry(DateTimeOffset Start, DateTimeOffset E
 }
 
 internal sealed record CurrentTaskContext(DateTimeOffset Start, string? PreviousTaskName);
+
+internal sealed record TaskSegmentContext(DateTimeOffset Start, DateTimeOffset End, string? PreviousTaskName, string? NextTaskName);
