@@ -25,5 +25,8 @@ desktop.ini
 # Activity Watchdog reports
 dotnet/activity-watchdog/reports/
 
+# TimeTracker reports
+dotnet/timetracker/reports/
+
 # User-specific config (optional - remove if you want to track)
 # config/apps.json
