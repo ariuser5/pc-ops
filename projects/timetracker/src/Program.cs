@@ -743,13 +743,30 @@ internal static class CommandFactory
 		}
 
 		var rawValue = argumentResult.Tokens.Single().Value;
+		if (TryParseReportDateAlias(rawValue, out var aliasedDate))
+		{
+			return aliasedDate;
+		}
+
 		if (DateOnly.TryParseExact(rawValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
 		{
 			return date;
 		}
 
-		argumentResult.AddError($"Invalid date '{rawValue}'. Use yyyy-MM-dd.");
+		argumentResult.AddError($"Invalid date '{rawValue}'. Use yyyy-MM-dd, '.' , or 'today'.");
 		return null;
+	}
+
+	private static bool TryParseReportDateAlias(string rawValue, out DateOnly date)
+	{
+		if (rawValue == "." || string.Equals(rawValue, "today", StringComparison.OrdinalIgnoreCase))
+		{
+			date = DateOnly.FromDateTime(DateTime.Now);
+			return true;
+		}
+
+		date = default;
+		return false;
 	}
 
 	private static DateTimeOffset? ParseOptionalMomentOption(ArgumentResult argumentResult)
