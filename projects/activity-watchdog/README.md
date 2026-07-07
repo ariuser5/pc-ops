@@ -5,7 +5,7 @@ Small console app that shows how long it has been since you last reset a machine
 ## Run
 
 ```powershell
-dotnet run --project ./dotnet/activity-watchdog/src/ActivityWatchdog.csproj
+dotnet run --project ./projects/activity-watchdog/src/ActivityWatchdog.csproj
 ```
 
 ## Controls
@@ -21,7 +21,7 @@ dotnet run --project ./dotnet/activity-watchdog/src/ActivityWatchdog.csproj
 The app reads `appsettings.json` from the executable folder by default. You can point it somewhere else with `--config`.
 
 ```powershell
-dotnet run --project ./dotnet/activity-watchdog/src/ActivityWatchdog.csproj -- --config C:\path\to\appsettings.json
+dotnet run --project ./projects/activity-watchdog/src/ActivityWatchdog.csproj -- --config C:\path\to\appsettings.json
 ```
 
 Threshold commands are optional and run once per threshold until the timer is reset. The spawned process receives these environment variables:
@@ -37,4 +37,4 @@ Set `alarm` to `true` on a threshold to play the default alarm sequence when tha
 
 Set `banner` to `true` on a threshold to show a desktop banner with `Reset timer` and `Dismiss` buttons. `Reset timer` resets the timer and dismisses the banner; `Dismiss` only hides the banner until the threshold is reached again. The banner now targets Windows, macOS, and Linux desktop environments.
 
-Time tracking now lives in the separate `dotnet/timetracker` project.
+Time tracking now lives in the separate `projects/timetracker` project.

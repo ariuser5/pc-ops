@@ -72,7 +72,7 @@ $env:BACKUP_BW_ITEM_NAME = "<your-item-name>"
 Use `-Verbose` on the wrapper to print step-level diagnostics without logging passwords, session tokens, or secret values.
 
 ```powershell
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 	-SourcePath "C:\Users\you\Documents" \
 	-Verbose
 ```
@@ -80,20 +80,20 @@ pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 Replace the destination inside `scripts/Backup-SecuritySdCard.ps1`, then run:
 
 ```powershell
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 	-SourcePath "C:\Users\you\Documents"
 ```
 
 You can also pass the source path positionally (first argument):
 
 ```powershell
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 "C:\Users\you\Documents"
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 "C:\Users\you\Documents"
 ```
 
 Keep local archive after upload:
 
 ```powershell
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 	-SourcePath "C:\Users\you\Documents" \
 	-KeepLocal
 ```
@@ -102,7 +102,7 @@ Use a manually provided password and skip Bitwarden:
 
 ```powershell
 $pw = Read-Host "Archive password" -AsSecureString
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 	-SourcePath "C:\Users\you\Documents" \
 	-ArchivePassword $pw
 ```
@@ -110,5 +110,5 @@ pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1 \
 If you omit `-SourcePath`, the wrapper prompts for it interactively.
 
 ```powershell
-pwsh -File .\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1
+pwsh -File .\automations\backup-to-gdrive\scripts\Backup-SecuritySdCard.ps1
 ```

@@ -7,26 +7,26 @@ The app does not need to stay open. You run a command when you want to change st
 ## Run
 
 ```powershell
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- <command>
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- <command>
 ```
 
 Examples:
 
 ```powershell
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Feature-Work
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Feature-Work --from 10:15
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set --from 10:15
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Ticket-123 --from 09:00 --to 11:00
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- --refresh-state status
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 12:00 --to 12:30
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break remove --from 12:00 --to 12:30
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 13:00 --to 14:00 --daily --name Lunch
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break list --daily
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break remove Lunch
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- hours set --from 09:00 --to 17:00
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- stop
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- resume
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- task set Feature-Work
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- task set Feature-Work --from 10:15
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- task set --from 10:15
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- task set Ticket-123 --from 09:00 --to 11:00
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- --refresh-state status
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- break set --from 12:00 --to 12:30
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- break remove --from 12:00 --to 12:30
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- break set --from 13:00 --to 14:00 --daily --name Lunch
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- break list --daily
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- break remove Lunch
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- hours set --from 09:00 --to 17:00
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- stop
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- resume
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31
 ```
 
 ## Commands
@@ -70,7 +70,7 @@ Legacy compatibility aliases still work, but they are no longer the documented A
 
 ## Data Files
 
-The app stores append-only tracking data under `dotnet/timetracker/reports/`.
+The app stores append-only tracking data under `projects/timetracker/reports/`.
 
 - `tracker-events.jsonl`: the append-only event log. Commands write structured events here, such as task changes, work-hour updates, stop/resume events, bounded corrections, one-off breaks, break removals, and recurring daily break rules.
 - `tracker-state.json`: a persisted snapshot of the latest state for quick reads. Reports still rebuild the timeline from `tracker-events.jsonl`; this file is a convenience cache, not the source of history.
