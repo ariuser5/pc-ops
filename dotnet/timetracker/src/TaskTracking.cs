@@ -270,7 +270,7 @@ internal sealed class DailyTaskReportService
 	public IReadOnlyList<BreakIntervalEntry> GetBreakIntervals(DateOnly date, DateTimeOffset now)
 	{
 		var rangeStart = AtLocal(date, TimeOnly.MinValue);
-		var rangeEnd = Min(AtLocal(date.AddDays(1), TimeOnly.MinValue), now);
+		var rangeEnd = AtLocal(date.AddDays(1), TimeOnly.MinValue);
 		if (rangeEnd <= rangeStart)
 		{
 			return [];
