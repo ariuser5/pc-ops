@@ -127,7 +127,7 @@ internal sealed class DailyTaskReportService
 		return new TrackerMutationResult(true, $"Removed break {FormatInterval(from, to)}.", state);
 	}
 
-	public TrackerMutationResult SetRecurringBreak(TimeOnly from, TimeOnly to)
+	public TrackerMutationResult SetRecurringBreak(TimeOnly from, TimeOnly to, string? breakRuleId = null)
 	{
 		if (to <= from)
 		{
@@ -136,7 +136,16 @@ internal sealed class DailyTaskReportService
 
 		var now = DateTimeOffset.Now;
 		var state = EnsureInitialized(now);
-		var breakRule = new RecurringBreakRule(GenerateRecurringBreakRuleId(), from, to);
+		var requestedBreakRuleId = string.IsNullOrWhiteSpace(breakRuleId)
+			? GenerateRecurringBreakRuleId()
+			: breakRuleId.Trim();
+		var recurringRules = BuildActiveRecurringBreakRules();
+		if (recurringRules.ContainsKey(requestedBreakRuleId))
+		{
+			throw new ArgumentException($"A recurring break with id '{requestedBreakRuleId}' already exists. Choose a different --name value or remove the existing rule first.");
+		}
+
+		var breakRule = new RecurringBreakRule(requestedBreakRuleId, from, to);
 		AppendRecurringBreak(state, now, breakRule);
 		return new TrackerMutationResult(true, $"Recorded daily break {FormatTimeRange(from, to)} with id {breakRule.Id}.", state);
 	}

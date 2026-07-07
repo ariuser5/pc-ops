@@ -63,12 +63,17 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	public int SetBreakFromApi(DateTimeOffset from, DateTimeOffset to, bool daily)
+	public int SetBreakFromApi(DateTimeOffset from, DateTimeOffset to, bool daily, string? breakRuleName)
 	{
 		if (daily)
 		{
-			WriteLines([_reportService.SetRecurringBreak(TimeOnly.FromDateTime(from.LocalDateTime), TimeOnly.FromDateTime(to.LocalDateTime)).Message]);
+			WriteLines([_reportService.SetRecurringBreak(TimeOnly.FromDateTime(from.LocalDateTime), TimeOnly.FromDateTime(to.LocalDateTime), breakRuleName).Message]);
 			return 0;
+		}
+
+		if (!string.IsNullOrWhiteSpace(breakRuleName))
+		{
+			throw new ArgumentException("The --name option can only be used together with --daily.");
 		}
 
 		return SetBreak(from, to);
@@ -462,14 +467,19 @@ internal static class CommandFactory
 		var dailyOption = new Option<bool>("--daily");
 		dailyOption.Description = "Treat the break as a recurring daily break rule.";
 
+		var nameOption = new Option<string?>("--name");
+		nameOption.Description = "Custom id to assign to a recurring daily break rule.";
+
 		var command = new Command("set", "Set a break interval by subtracting it from tracked work time.");
 		command.Add(fromOption);
 		command.Add(toOption);
 		command.Add(dailyOption);
+		command.Add(nameOption);
 		command.SetAction(parseResult => app.SetBreakFromApi(
 			parseResult.GetValue(fromOption),
 			parseResult.GetValue(toOption),
-			parseResult.GetValue(dailyOption)));
+			parseResult.GetValue(dailyOption),
+			parseResult.GetValue(nameOption)));
 		return command;
 	}
 

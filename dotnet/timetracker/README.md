@@ -20,9 +20,9 @@ dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- task set Tic
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- --refresh-state status
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 12:00 --to 12:30
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break remove --from 12:00 --to 12:30
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 13:00 --to 14:00 --daily
+dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break set --from 13:00 --to 14:00 --daily --name Lunch
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break list --daily
-dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break remove 3fa2c91b
+dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- break remove Lunch
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- hours set --from 09:00 --to 17:00
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- stop
 dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- resume
@@ -35,7 +35,7 @@ dotnet run --project ./dotnet/timetracker/src/TimeTracker.csproj -- report --fro
 - `task set [task-name] [--from HH:mm|HH;mm|yyyy-MM-ddTHH:mm] [--to HH:mm|HH;mm|yyyy-MM-ddTHH:mm]`: the canonical task command.
 	Without `--to`, it sets the current task and optionally backdates its start.
 	With `--from` and `--to`, it assigns a bounded task interval.
-- `break set --from HH:mm|HH;mm|yyyy-MM-ddTHH:mm --to HH:mm|HH;mm|yyyy-MM-ddTHH:mm [--daily]`: set a one-off break, or a recurring daily break rule when `--daily` is present.
+- `break set --from HH:mm|HH;mm|yyyy-MM-ddTHH:mm --to HH:mm|HH;mm|yyyy-MM-ddTHH:mm [--daily] [--name <id>]`: set a one-off break, or a recurring daily break rule when `--daily` is present. Use `--name` to provide a custom unique id for the recurring rule.
 - `break remove --from HH:mm|HH;mm|yyyy-MM-ddTHH:mm --to HH:mm|HH;mm|yyyy-MM-ddTHH:mm`: remove a one-off break interval, or cancel today's instance of a recurring break.
 - `break remove <id>`: remove a recurring daily break rule by id.
 - `break list [--daily]`: list today's effective breaks and, optionally, recurring daily break rules. With `--daily`, only recurring rules are shown.
@@ -65,7 +65,7 @@ Legacy compatibility aliases still work, but they are no longer the documented A
 - `task set --from ... --to ...` assigns a bounded slice of time to a task. If the same task was already active earlier, moving `--from` later naturally restores the earlier slice to the previous task.
 - `break set` removes a bounded slice of time from all tracked work, so lunch or pause time does not count toward any task.
 - To modify a one-off break, remove the old interval and set the new one. Example: `break remove --from 13:00 --to 14:00` followed by `break set --from 13:15 --to 13:45`.
-- `break set --daily` creates a recurring daily break rule, such as a lunch break. `break remove` can cancel just today's instance, `break list --daily` shows rule ids, and `break remove <id>` deletes the recurring rule itself.
+- `break set --daily` creates a recurring daily break rule, such as a lunch break. `--name` lets you choose a stable custom id like `Lunch`; otherwise an id is auto-generated. `break remove` can cancel just today's instance, `break list --daily` shows rule ids, and `break remove <id>` deletes the recurring rule itself.
 - `stop` and `resume` pause and restart automatic allocation without changing the current task.
 
 ## Data Files
