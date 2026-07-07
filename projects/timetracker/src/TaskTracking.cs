@@ -330,6 +330,24 @@ internal sealed class DailyTaskReportService
 			totalDuration);
 	}
 
+	public DetailedTimetrackReport BuildDetailedRangeSummary(DateOnly start, DateOnly end, DateTimeOffset now)
+	{
+		if (end < start)
+		{
+			throw new ArgumentException("Report end date must be on or after the start date.");
+		}
+
+		var totalSummary = BuildRangeSummary(start, end, now);
+		var dailySummaries = new List<DailyTimetrackSnapshot>();
+
+		for (var date = start; date <= end; date = date.AddDays(1))
+		{
+			dailySummaries.Add(new DailyTimetrackSnapshot(date, BuildRangeSummary(date, date, now)));
+		}
+
+		return new DetailedTimetrackReport(totalSummary, dailySummaries);
+	}
+
 	public static string NormalizeTaskName(string? taskName)
 	{
 		return string.IsNullOrWhiteSpace(taskName) ? DefaultTaskName : taskName.Trim();
@@ -1027,6 +1045,10 @@ internal sealed record TrackerState(string CurrentTask, TimeOnly WorkdayStart, T
 }
 
 internal sealed record TimetrackSnapshot(string Title, string SourceDescription, IReadOnlyList<TaskDurationEntry> Entries, TimeSpan Total);
+
+internal sealed record DailyTimetrackSnapshot(DateOnly Date, TimetrackSnapshot Summary);
+
+internal sealed record DetailedTimetrackReport(TimetrackSnapshot TotalSummary, IReadOnlyList<DailyTimetrackSnapshot> DailySummaries);
 
 internal sealed record TaskDurationEntry(string TaskName, TimeSpan Duration);
 

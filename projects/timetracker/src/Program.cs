@@ -172,7 +172,7 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	public int ShowReport(DateOnly? fromDate, DateOnly? toDate)
+	public int ShowReport(DateOnly? fromDate, DateOnly? toDate, bool detailed)
 	{
 		var reportDate = DateOnly.FromDateTime(DateTime.Now);
 		var effectiveFromDate = fromDate ?? toDate ?? reportDate;
@@ -183,9 +183,12 @@ internal sealed class TimeTrackerCli
 			throw new ArgumentException("Report end date must be on or after the start date.");
 		}
 
-		WriteLines(FormatTimetrack(
-			_reportService.BuildRangeSummary(effectiveFromDate, effectiveToDate, DateTimeOffset.Now),
-			_reportService.GetCurrentState()));
+		var now = DateTimeOffset.Now;
+		var currentState = _reportService.GetCurrentState();
+
+		WriteLines(detailed
+			? FormatDetailedTimetrack(_reportService.BuildDetailedRangeSummary(effectiveFromDate, effectiveToDate, now), currentState)
+			: FormatTimetrack(_reportService.BuildRangeSummary(effectiveFromDate, effectiveToDate, now), currentState));
 		return 0;
 	}
 
@@ -279,20 +282,11 @@ internal sealed class TimeTrackerCli
 			return ["No tracked time recorded yet for today."];
 		}
 
-		const int taskColumnWidth = 28;
 		var lines = new List<string>
 		{
-			$"{PadOrTrim("Task", taskColumnWidth)}  Duration",
-			$"{new string('-', taskColumnWidth)}  --------"
 		};
 
-		foreach (var entry in snapshot.Entries)
-		{
-			lines.Add($"{PadOrTrim(entry.TaskName, taskColumnWidth)}  {FormatElapsed(entry.Duration)}");
-		}
-
-		lines.Add($"{new string('-', taskColumnWidth)}  --------");
-		lines.Add($"{PadOrTrim("Total", taskColumnWidth)}  {FormatElapsed(snapshot.Total)}");
+		AppendTaskDurationTable(lines, snapshot.Entries, snapshot.Total, "Duration");
 		return lines;
 	}
 
@@ -313,18 +307,61 @@ internal sealed class TimeTrackerCli
 			return lines;
 		}
 
-		const int taskColumnWidth = 28;
-		lines.Add($"{PadOrTrim("Task", taskColumnWidth)}  Hours");
-		lines.Add($"{new string('-', taskColumnWidth)}  -----");
+		AppendTaskDurationTable(lines, snapshot.Entries, snapshot.Total, "Hours");
+		return lines;
+	}
 
-		foreach (var entry in snapshot.Entries)
+	private static IReadOnlyList<string> FormatDetailedTimetrack(DetailedTimetrackReport report, TrackerState currentState)
+	{
+		var lines = new List<string>
+		{
+			$"{report.TotalSummary.Title} (detailed)",
+			$"Current task: {currentState.CurrentTask}",
+			$"Recording: {(currentState.IsRecording ? "active" : "paused")}",
+			report.TotalSummary.SourceDescription,
+			string.Empty
+		};
+
+		foreach (var daily in report.DailySummaries)
+		{
+			lines.Add($"{daily.Date:yyyy-MM-dd} ({daily.Date.DayOfWeek}) | Total {FormatElapsed(daily.Summary.Total)}");
+
+			if (daily.Summary.Entries.Count == 0)
+			{
+				lines.Add("No tracked time recorded for this day.");
+			}
+			else
+			{
+				AppendTaskDurationTable(lines, daily.Summary.Entries, daily.Summary.Total, "Hours");
+			}
+
+			lines.Add(string.Empty);
+		}
+
+		lines.Add("Interval totals");
+		if (report.TotalSummary.Entries.Count == 0)
+		{
+			lines.Add("No tracked time recorded for the selected period.");
+			return lines;
+		}
+
+		AppendTaskDurationTable(lines, report.TotalSummary.Entries, report.TotalSummary.Total, "Hours");
+		return lines;
+	}
+
+	private static void AppendTaskDurationTable(List<string> lines, IReadOnlyList<TaskDurationEntry> entries, TimeSpan total, string valueHeader)
+	{
+		const int taskColumnWidth = 28;
+		lines.Add($"{PadOrTrim("Task", taskColumnWidth)}  {valueHeader}");
+		lines.Add($"{new string('-', taskColumnWidth)}  {new string('-', valueHeader.Length)}");
+
+		foreach (var entry in entries)
 		{
 			lines.Add($"{PadOrTrim(entry.TaskName, taskColumnWidth)}  {FormatElapsed(entry.Duration)}");
 		}
 
-		lines.Add($"{new string('-', taskColumnWidth)}  -----");
-		lines.Add($"{PadOrTrim("Total", taskColumnWidth)}  {FormatElapsed(snapshot.Total)}");
-		return lines;
+		lines.Add($"{new string('-', taskColumnWidth)}  {new string('-', valueHeader.Length)}");
+		lines.Add($"{PadOrTrim("Total", taskColumnWidth)}  {FormatElapsed(total)}");
 	}
 
 	private static string FormatElapsed(TimeSpan elapsed)
@@ -576,12 +613,17 @@ internal static class CommandFactory
 		toOption.Description = "End date in yyyy-MM-dd format.";
 		toOption.CustomParser = ParseDateOption;
 
+		var detailedOption = new Option<bool>("--detailed");
+		detailedOption.Description = "Show a per-day breakdown followed by interval totals.";
+
 		var command = new Command("report", "Show totals for a date interval; defaults to today.");
 		command.Add(fromOption);
 		command.Add(toOption);
+		command.Add(detailedOption);
 		command.SetAction(parseResult => app.ShowReport(
 			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption)));
+			parseResult.GetValue(toOption),
+			parseResult.GetValue(detailedOption)));
 		return command;
 	}
 

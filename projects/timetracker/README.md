@@ -27,6 +27,7 @@ dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- hours set 
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- stop
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- resume
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31 --detailed
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --to .
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --to TODAY
 ```
@@ -44,7 +45,7 @@ dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --t
 - `hours set --from HH:mm|HH;mm --to HH:mm|HH;mm`: set working hours.
 - `stop`: pause automatic workday allocation.
 - `resume`: resume automatic workday allocation.
-- `report [--from yyyy-MM-dd|.|today] [--to yyyy-MM-dd|.|today]`: show a time summary for a date interval. `.` and `today` are aliases for the current local date. If no dates are provided, it reports today.
+- `report [--from yyyy-MM-dd|.|today] [--to yyyy-MM-dd|.|today] [--detailed]`: show a time summary for a date interval. `.` and `today` are aliases for the current local date. With `--detailed`, the output includes a per-day breakdown followed by interval totals per task. If no dates are provided, it reports today.
 - `--refresh-state`: rebuild `tracker-state.json` from the event log before running a command. You can also run it by itself.
 - `help`: show help.
 
