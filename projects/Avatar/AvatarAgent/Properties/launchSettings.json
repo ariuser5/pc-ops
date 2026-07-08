@@ -1,11 +1,11 @@
 ﻿{
-  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
     "AvatarAgent": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "environmentVariables": {
-        "DOTNET_ENVIRONMENT": "Development"
+		"DOTNET_ENVIRONMENT": "Development"
       }
     }
   }

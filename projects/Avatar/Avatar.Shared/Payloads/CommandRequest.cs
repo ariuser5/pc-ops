@@ -1,18 +1,10 @@
+using Avatar.Shared.Protocol;
+
 namespace Avatar.Shared.Payloads;
 
 public sealed class CommandRequest
 {
-	private static readonly string[] SupportedActions =
-	[
-		"MoveMouse",
-		"LeftClick",
-		"RightClick",
-		"DoubleClick",
-		"Scroll",
-		"TypeText",
-		"PressKey",
-		"HotKey"
-	];
+	private static readonly string[] SupportedActions = CommandActionExtensions.GetSupportedProtocolValues().ToArray();
 
 	public string? Action { get; init; }
 
@@ -28,46 +20,59 @@ public sealed class CommandRequest
 
 	public int? Y { get; init; }
 
-	public string GetNormalizedAction()
+	public CommandAction GetRequiredAction()
 	{
-		if (string.IsNullOrWhiteSpace(Action))
+		if (TryGetAction(out var action, out var error))
 		{
-			throw new ArgumentException("Action is required.", nameof(Action));
+			return action;
 		}
 
-		return Action.Trim();
+		throw new ArgumentException(error, nameof(Action));
+	}
+
+	public bool TryGetAction(out CommandAction action, out string error)
+	{
+		action = default;
+		error = string.Empty;
+
+		if (string.IsNullOrWhiteSpace(Action))
+		{
+			error = "Action is required.";
+			return false;
+		}
+
+		if (!CommandActionExtensions.TryParseProtocolValue(Action, out action))
+		{
+			error = $"Unsupported action '{Action}'. Supported actions: {string.Join(", ", SupportedActions)}.";
+			return false;
+		}
+
+		return true;
 	}
 
 	public Dictionary<string, string[]> Validate()
 	{
 		var errors = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-		var normalizedAction = Action?.Trim();
 
-		if (string.IsNullOrWhiteSpace(normalizedAction))
+		if (!TryGetAction(out var action, out var actionError))
 		{
-			AddError(errors, "action", "Action is required.");
+			AddError(errors, "action", actionError);
 			return ToValidationErrors(errors);
 		}
 
-		if (!SupportedActions.Contains(normalizedAction, StringComparer.OrdinalIgnoreCase))
+		switch (action)
 		{
-			AddError(errors, "action", $"Unsupported action '{Action}'. Supported actions: {string.Join(", ", SupportedActions)}.");
-			return ToValidationErrors(errors);
-		}
-
-		switch (normalizedAction)
-		{
-			case "MoveMouse":
+			case CommandAction.MoveMouse:
 				RequireCoordinates(errors);
 				break;
 
-			case "LeftClick":
-			case "RightClick":
-			case "DoubleClick":
+			case CommandAction.LeftClick:
+			case CommandAction.RightClick:
+			case CommandAction.DoubleClick:
 				ValidateOptionalCoordinates(errors);
 				break;
 
-			case "Scroll":
+			case CommandAction.Scroll:
 				ValidateOptionalCoordinates(errors);
 				if (!Delta.HasValue)
 				{
@@ -79,21 +84,21 @@ public sealed class CommandRequest
 				}
 				break;
 
-			case "TypeText":
+			case CommandAction.TypeText:
 				if (string.IsNullOrWhiteSpace(Text))
 				{
 					AddError(errors, "text", "Text is required for TypeText.");
 				}
 				break;
 
-			case "PressKey":
+			case CommandAction.PressKey:
 				if (string.IsNullOrWhiteSpace(Key))
 				{
 					AddError(errors, "key", "Key is required for PressKey.");
 				}
 				break;
 
-			case "HotKey":
+			case CommandAction.HotKey:
 				if (Keys is null || Keys.Length == 0)
 				{
 					AddError(errors, "keys", "Keys must contain at least one value for HotKey.");

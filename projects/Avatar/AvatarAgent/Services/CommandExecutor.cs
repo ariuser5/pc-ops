@@ -1,4 +1,5 @@
 using Avatar.Shared.Payloads;
+using Avatar.Shared.Protocol;
 using AvatarAgent.Win32;
 
 namespace AvatarAgent.Services;
@@ -21,19 +22,19 @@ public sealed class CommandExecutor : ICommandExecutor
 		ArgumentNullException.ThrowIfNull(request);
 		cancellationToken.ThrowIfCancellationRequested();
 
-		var action = request.GetNormalizedAction();
-		_logger.LogInformation("Executing action {Action}.", action);
+		var action = request.GetRequiredAction();
+		_logger.LogInformation("Executing action {Action}.", action.ToProtocolValue());
 
 		var result = action switch
 		{
-			"MoveMouse" => ExecuteMoveMouse(request),
-			"LeftClick" => ExecuteLeftClick(request),
-			"RightClick" => ExecuteRightClick(request),
-			"DoubleClick" => ExecuteDoubleClick(request),
-			"Scroll" => ExecuteScroll(request),
-			"TypeText" => ExecuteTypeText(request),
-			"PressKey" => ExecutePressKey(request),
-			"HotKey" => ExecuteHotKey(request),
+			CommandAction.MoveMouse => ExecuteMoveMouse(request),
+			CommandAction.LeftClick => ExecuteLeftClick(request),
+			CommandAction.RightClick => ExecuteRightClick(request),
+			CommandAction.DoubleClick => ExecuteDoubleClick(request),
+			CommandAction.Scroll => ExecuteScroll(request),
+			CommandAction.TypeText => ExecuteTypeText(request),
+			CommandAction.PressKey => ExecutePressKey(request),
+			CommandAction.HotKey => ExecuteHotKey(request),
 			_ => throw new ArgumentException($"Unsupported action '{action}'.", nameof(request))
 		};
 

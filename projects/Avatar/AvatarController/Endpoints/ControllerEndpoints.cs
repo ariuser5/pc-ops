@@ -1,7 +1,9 @@
-using System.Net.WebSockets;
+using System.Text.Json;
 using Avatar.Shared.Payloads;
-using Avatar.Shared.Protocol;
+using AvatarController.Configuration;
+using AvatarController.Models;
 using AvatarController.Services;
+using Avatar.Shared.Protocol;
 
 namespace AvatarController.Endpoints;
 
@@ -9,199 +11,127 @@ public static class ControllerEndpoints
 {
 	public static IEndpointRouteBuilder MapControllerEndpoints(this IEndpointRouteBuilder app)
 	{
-		app.MapGet("/health", static () => Results.Ok(new { status = "ok" }));
-		app.Map("/ws", HandleWebSocketAsync);
+		// Capture a logger instance at startup to avoid creating one per request.
+		var loggerFactory = app.ServiceProvider.GetRequiredService<ILoggerFactory>();
+		var logger = loggerFactory.CreateLogger("AvatarController.Endpoints");
+
+		app.MapGet("/health", (AgentManager agentManager, AvatarControllerOptions options, HttpContext context) =>
+		{
+			var response = new ControllerHealthResponse(
+				Status: "ok",
+				UtcNow: DateTimeOffset.UtcNow,
+				ConnectedAgents: agentManager.GetConnectedSessions().Count,
+				HeartbeatIntervalSeconds: options.HeartbeatIntervalSeconds,
+				CommandTimeoutSeconds: options.CommandTimeoutSeconds);
+
+			logger.LogDebug("HTTP GET /health called. ConnectedAgents={ConnectedAgents}", response.ConnectedAgents);
+
+			LogRequestTrace(logger, context, response);
+
+			return Results.Ok(response);
+		});
+
+		app.MapGet("/agents", (AgentManager agentManager, HttpContext context) =>
+		{
+			var sessions = agentManager.GetConnectedSessions().Select(AgentSummaryResponse.FromSession).ToList();
+			logger.LogDebug("HTTP GET /agents called. ConnectedAgents={ConnectedAgents}", sessions.Count);
+
+			LogRequestTrace(logger, context, sessions);
+
+			return Results.Ok(sessions);
+		});
+
+		app.MapPost("/command", HandleCommandAsync);
+		app.Map("/ws", static (HttpContext context, AgentConnectionHandler connectionHandler) => connectionHandler.HandleAsync(context));
 		return app;
 	}
 
-	private static async Task HandleWebSocketAsync(HttpContext context, AgentManager agentManager, ILoggerFactory loggerFactory)
+	private static async Task<IResult> HandleCommandAsync(SendCommandApiRequest request, IAgentCommandService commandService, HttpContext context)
 	{
-		var logger = loggerFactory.CreateLogger("AvatarController.Connection");
-		if (!context.WebSockets.IsWebSocketRequest)
+		// Reuse the startup logger via the request services (same instance)
+		var loggerFactory = context.RequestServices.GetRequiredService<ILoggerFactory>();
+		var logger = loggerFactory.CreateLogger("AvatarController.Endpoints");
+
+		logger.LogInformation("HTTP POST /command received. AgentId={AgentId}, Action={Action}, TraceId={TraceId}", request?.AgentId ?? "(null)", request?.Command?.Action ?? "(null)", context.TraceIdentifier);
+
+		LogRequestTrace(logger, context, request);
+
+		var errors = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+		if (string.IsNullOrWhiteSpace(request.AgentId))
 		{
-			context.Response.StatusCode = StatusCodes.Status400BadRequest;
-			await context.Response.WriteAsJsonAsync(new
-			{
-				status = "error",
-				error = "WebSocket upgrade required. Connect to /ws using ws:// or wss://."
-			}, context.RequestAborted);
-			return;
+			errors["agentId"] = ["AgentId is required."];
 		}
 
-		using var socket = await context.WebSockets.AcceptWebSocketAsync();
-		logger.LogInformation("Incoming websocket connection from {RemoteIp}.", context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+		if (request.Command is null)
+		{
+			errors["command"] = ["Command payload is required."];
+		}
+		else
+		{
+			foreach (var errorEntry in request.Command.Validate())
+			{
+				errors[errorEntry.Key] = errorEntry.Value;
+			}
+		}
 
-		AgentSession? session = null;
+		if (errors.Count > 0)
+		{
+			logger.LogWarning("Validation failed for POST /command: {Errors}", errors);
+			return Results.ValidationProblem(errors);
+		}
+
+		var normalizedAgentId = request.AgentId!.Trim();
+		logger.LogDebug("Dispatching command to agent {AgentId} (action: {Action}).", normalizedAgentId, request.Command!.Action);
+		var dispatchResult = await commandService.SendCommandAsync(normalizedAgentId, request.Command!, context.RequestAborted);
+
+		switch (dispatchResult.Status)
+		{
+			case AgentCommandDispatchStatus.Success:
+				logger.LogInformation("Command to {AgentId} completed successfully (requestId: {RequestId}).", normalizedAgentId, dispatchResult.Completion?.RequestId ?? "none");
+				return Results.Ok(SendCommandApiResponse.FromCompletion(normalizedAgentId, dispatchResult.Completion!));
+			case AgentCommandDispatchStatus.NotFound:
+				logger.LogWarning("Agent not found: {AgentId}", normalizedAgentId);
+				return Results.NotFound(new { error = dispatchResult.Message });
+			case AgentCommandDispatchStatus.TimedOut:
+				logger.LogWarning("Command to {AgentId} timed out.", normalizedAgentId);
+				return Results.Json(new { error = dispatchResult.Message }, statusCode: StatusCodes.Status504GatewayTimeout);
+			case AgentCommandDispatchStatus.AgentError:
+				logger.LogWarning("Agent {AgentId} returned an error for request {RequestId}: {Message}", normalizedAgentId, dispatchResult.Completion?.RequestId ?? "none", dispatchResult.Message);
+				return Results.Problem(statusCode: StatusCodes.Status502BadGateway, title: "Agent command failed.", detail: dispatchResult.Message);
+			case AgentCommandDispatchStatus.AgentUnavailable:
+				logger.LogWarning("Agent {AgentId} unavailable for command dispatch: {Message}", normalizedAgentId, dispatchResult.Message);
+				return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Agent unavailable.", detail: dispatchResult.Message);
+			default:
+				logger.LogError("Unexpected command dispatch state for agent {AgentId}: {Status}", normalizedAgentId, dispatchResult.Status);
+				return Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Unexpected command dispatch state.");
+		}
+	}
+
+	private static void LogRequestTrace(ILogger logger, HttpContext context, object? payload)
+	{
+		if (!logger.IsEnabled(LogLevel.Trace))
+			return;
+
+		var payloadText = TrySerializePayload(payload, logger);
+
+		logger.LogTrace("HTTP details: TraceId={TraceId}, Timestamp={Timestamp}, Payload={Payload}", context.TraceIdentifier, DateTimeOffset.UtcNow, payloadText);
+	}
+
+	private static string? TrySerializePayload(object? payload, ILogger logger)
+	{
+		if (payload is null)
+			return null;
+
 		try
 		{
-			session = await RegisterAgentAsync(socket, loggerFactory, context.RequestAborted);
-			if (session is null)
-			{
-				return;
-			}
-
-			agentManager.Upsert(session);
-
-			await SendTestCommandAsync(session, context.RequestAborted);
-
-			while (socket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
-			{
-				var incoming = await WebSocketTextMessageCodec.ReceiveTextAsync(socket, context.RequestAborted);
-				if (incoming is null)
-				{
-					break;
-				}
-
-				logger.LogInformation("Received from agent {AgentId}: {Payload}", session.AgentId, incoming);
-				await HandleAgentMessageAsync(session, incoming, logger, context.RequestAborted);
-			}
+			return JsonSerializer.Serialize(payload, AvatarProtocolJson.SerializerOptions);
 		}
-		finally
+		catch (Exception ex)
 		{
-			if (session is not null)
-			{
-				agentManager.Remove(session);
-			}
-
-			if (socket.State == WebSocketState.Open)
-			{
-				await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed.", context.RequestAborted);
-			}
-
-			logger.LogInformation("WebSocket connection closed.");
-		}
-	}
-
-	private static async Task HandleAgentMessageAsync(AgentSession session, string incoming, ILogger logger, CancellationToken cancellationToken)
-	{
-		if (!AvatarProtocolJson.TryDeserializeEnvelope(incoming, out var envelope, out var parseError) || envelope is null)
-		{
-			logger.LogWarning("Agent {AgentId} sent invalid envelope: {Error}", session.AgentId, parseError);
-			await SendErrorAsync(session, null, parseError, cancellationToken);
-			return;
-		}
-
-		if (!AvatarMessageTypeExtensions.TryParseProtocolValue(envelope.Type, out var messageType))
-		{
-			var error = $"Unsupported message type '{envelope.Type}'.";
-			logger.LogWarning("Agent {AgentId} sent unsupported message type: {Type}", session.AgentId, envelope.Type);
-			await SendErrorAsync(session, envelope.RequestId, error, cancellationToken);
-			return;
-		}
-
-		switch (messageType)
-		{
-			case AvatarMessageType.Result:
-				if (AvatarProtocolJson.TryDeserializePayload<CommandResultPayload>(envelope, out var resultPayload, out var resultError) && resultPayload is not null)
-				{
-					logger.LogInformation(
-						"Agent {AgentId} completed request {RequestId} with status {Status} in {ElapsedMs} ms.",
-						session.AgentId,
-						envelope.RequestId ?? "none",
-						resultPayload.Status,
-						resultPayload.ElapsedMs);
-				}
-				else
-				{
-					await SendErrorAsync(session, envelope.RequestId, resultError, cancellationToken);
-				}
-				break;
-
-			case AvatarMessageType.Error:
-				if (AvatarProtocolJson.TryDeserializePayload<ErrorPayload>(envelope, out var errorPayload, out _) && errorPayload is not null)
-				{
-					logger.LogWarning("Agent {AgentId} returned error for request {RequestId}: {Message}", session.AgentId, envelope.RequestId ?? "none", errorPayload.Message);
-				}
-				break;
-
-			case AvatarMessageType.Heartbeat:
-				logger.LogDebug("Heartbeat received from {AgentId}.", session.AgentId);
-				break;
-
-			default:
-				logger.LogDebug("Ignoring message type {MessageType} from {AgentId}.", messageType, session.AgentId);
-				break;
-		}
-	}
-
-	private static async Task<AgentSession?> RegisterAgentAsync(WebSocket socket, ILoggerFactory loggerFactory, CancellationToken cancellationToken)
-	{
-		var logger = loggerFactory.CreateLogger("AvatarController.Register");
-		var incoming = await WebSocketTextMessageCodec.ReceiveTextAsync(socket, cancellationToken);
-		if (incoming is null)
-		{
-			logger.LogWarning("Connection closed before register message was received.");
+			logger.LogDebug(ex, "Failed to serialize payload for trace logging.");
 			return null;
 		}
-
-		if (!AvatarProtocolJson.TryDeserializeEnvelope(incoming, out var envelope, out var parseError) || envelope is null)
-		{
-			logger.LogWarning("Invalid register envelope: {Error}", parseError);
-			await SendEnvelopeAsync(socket, AvatarProtocolJson.CreateEnvelope(AvatarMessageType.Error, null, new ErrorPayload { Message = parseError }), cancellationToken);
-			return null;
-		}
-
-		if (!AvatarMessageTypeExtensions.TryParseProtocolValue(envelope.Type, out var messageType) || messageType != AvatarMessageType.Register)
-		{
-			const string error = "First message must be type 'register'.";
-			logger.LogWarning(error);
-			await SendEnvelopeAsync(socket, AvatarProtocolJson.CreateEnvelope(AvatarMessageType.Error, envelope.RequestId, new ErrorPayload { Message = error }), cancellationToken);
-			return null;
-		}
-
-		if (!AvatarProtocolJson.TryDeserializePayload<RegisterPayload>(envelope, out var registerPayload, out var payloadError) || registerPayload is null)
-		{
-			logger.LogWarning("Invalid register payload: {Error}", payloadError);
-			await SendEnvelopeAsync(socket, AvatarProtocolJson.CreateEnvelope(AvatarMessageType.Error, envelope.RequestId, new ErrorPayload { Message = payloadError }), cancellationToken);
-			return null;
-		}
-
-		if (string.IsNullOrWhiteSpace(registerPayload.AgentId) || string.IsNullOrWhiteSpace(registerPayload.Hostname) || string.IsNullOrWhiteSpace(registerPayload.Version))
-		{
-			const string error = "Register payload requires agentId, hostname, and version.";
-			logger.LogWarning(error);
-			await SendEnvelopeAsync(socket, AvatarProtocolJson.CreateEnvelope(AvatarMessageType.Error, envelope.RequestId, new ErrorPayload { Message = error }), cancellationToken);
-			return null;
-		}
-
-		logger.LogInformation("Register received for agent {AgentId} ({Hostname}) v{Version}.", registerPayload.AgentId, registerPayload.Hostname, registerPayload.Version);
-		var sessionLogger = loggerFactory.CreateLogger<AgentSession>();
-		return new AgentSession(registerPayload.AgentId, registerPayload.Hostname, registerPayload.Version, socket, sessionLogger);
 	}
 
-	private static Task SendEnvelopeAsync(WebSocket socket, AvatarEnvelope envelope, CancellationToken cancellationToken)
-	{
-		if (socket.State != WebSocketState.Open)
-		{
-			return Task.CompletedTask;
-		}
-
-		return WebSocketTextMessageCodec.SendTextAsync(socket, AvatarProtocolJson.Serialize(envelope), cancellationToken);
-	}
-
-	private static Task SendErrorAsync(AgentSession session, string? requestId, string message, CancellationToken cancellationToken)
-	{
-		return session.SendAsync(
-			AvatarProtocolJson.CreateEnvelope(
-				AvatarMessageType.Error,
-				requestId,
-				new ErrorPayload
-				{
-					Message = message
-				}),
-			cancellationToken);
-	}
-
-	private static Task SendTestCommandAsync(AgentSession session, CancellationToken cancellationToken)
-	{
-		var requestId = Guid.NewGuid().ToString("N");
-		var command = new CommandRequest
-		{
-			Action = "MoveMouse",
-			X = 500,
-			Y = 300
-		};
-
-		return session.SendAsync(AvatarProtocolJson.CreateEnvelope(AvatarMessageType.Command, requestId, command), cancellationToken);
-	}
 }

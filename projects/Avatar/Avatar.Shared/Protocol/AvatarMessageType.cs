@@ -11,6 +11,16 @@ public enum AvatarMessageType
 
 public static class AvatarMessageTypeExtensions
 {
+	public static AvatarMessageType ParseProtocolValue(string rawValue)
+	{
+		if (TryParseProtocolValue(rawValue, out var messageType))
+		{
+			return messageType;
+		}
+
+		throw new ArgumentOutOfRangeException(nameof(rawValue), rawValue, "Unsupported message type.");
+	}
+
 	public static string ToProtocolValue(this AvatarMessageType messageType)
 	{
 		return messageType switch

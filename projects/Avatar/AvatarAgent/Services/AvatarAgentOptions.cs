@@ -14,36 +14,63 @@ public sealed class AvatarAgentOptions
 
 	public string Version { get; init; } = "0.1.0";
 
+	public int WebSocketKeepAliveIntervalSeconds { get; init; } = 30;
+
+	public TimeSpan WebSocketKeepAliveInterval => TimeSpan.FromSeconds(WebSocketKeepAliveIntervalSeconds);
+
 	public static AvatarAgentOptions Create(IConfiguration configuration)
 	{
-		var reconnectDelaySeconds = 5;
-		var reconnectRaw = Environment.GetEnvironmentVariable("AVATAR_AGENT_RECONNECT_SECONDS")
-			?? configuration["AvatarAgent:ReconnectDelaySeconds"];
-		if (int.TryParse(reconnectRaw, out var parsedDelay) && parsedDelay > 0)
-		{
-			reconnectDelaySeconds = parsedDelay;
-		}
+		var section = configuration.GetSection("AvatarAgent");
 
 		return new AvatarAgentOptions
 		{
-			AgentId = Environment.GetEnvironmentVariable("AVATAR_AGENT_ID")
-				?? configuration["AvatarAgent:AgentId"]
+			AgentId = GetFirstNonEmpty(
+				Environment.GetEnvironmentVariable("AVATAR_AGENT_ID"),
+				section["AgentId"])
 				?? Environment.MachineName,
-			Hostname = Environment.GetEnvironmentVariable("AVATAR_AGENT_HOSTNAME")
-				?? configuration["AvatarAgent:Hostname"]
+			Hostname = GetFirstNonEmpty(
+				Environment.GetEnvironmentVariable("AVATAR_AGENT_HOSTNAME"),
+				section["Hostname"])
 				?? Environment.MachineName,
-			ControllerUrl = Environment.GetEnvironmentVariable("AVATAR_CONTROLLER_WS_URL")
-				?? configuration["AvatarAgent:ControllerUrl"]
+			ControllerUrl = GetFirstNonEmpty(
+				Environment.GetEnvironmentVariable("AVATAR_CONTROLLER_WS_URL"),
+				section["ControllerUrl"])
 				?? "ws://127.0.0.1:5050/ws",
-			Version = Environment.GetEnvironmentVariable("AVATAR_AGENT_VERSION")
-				?? configuration["AvatarAgent:Version"]
+			Version = GetFirstNonEmpty(
+				Environment.GetEnvironmentVariable("AVATAR_AGENT_VERSION"),
+				section["Version"])
 				?? GetDefaultVersion(),
-			ReconnectDelaySeconds = reconnectDelaySeconds
+			ReconnectDelaySeconds = GetPositiveInt("AVATAR_AGENT_RECONNECT_SECONDS", section["ReconnectDelaySeconds"], 5),
+			WebSocketKeepAliveIntervalSeconds = GetPositiveInt("AVATAR_AGENT_WS_KEEPALIVE_SECONDS", section["WebSocketKeepAliveIntervalSeconds"], 30)
 		};
 	}
 
 	private static string GetDefaultVersion()
 	{
 		return Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "0.1.0";
+	}
+
+	private static string? GetFirstNonEmpty(params string?[] values)
+	{
+		foreach (var value in values)
+		{
+			if (!string.IsNullOrWhiteSpace(value))
+			{
+				return value.Trim();
+			}
+		}
+
+		return null;
+	}
+
+	private static int GetPositiveInt(string environmentVariableName, string? configurationValue, int defaultValue)
+	{
+		var rawValue = GetFirstNonEmpty(Environment.GetEnvironmentVariable(environmentVariableName), configurationValue);
+		if (int.TryParse(rawValue, out var parsedValue) && parsedValue > 0)
+		{
+			return parsedValue;
+		}
+
+		return defaultValue;
 	}
 }

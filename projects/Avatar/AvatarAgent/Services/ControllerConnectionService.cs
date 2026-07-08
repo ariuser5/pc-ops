@@ -23,6 +23,7 @@ public sealed class ControllerConnectionService : BackgroundService
 		while (!stoppingToken.IsCancellationRequested)
 		{
 			using var socket = new ClientWebSocket();
+			socket.Options.KeepAliveInterval = _options.WebSocketKeepAliveInterval;
 			try
 			{
 				_logger.LogInformation("Connecting to controller at {ControllerUrl}...", _options.ControllerUrl);
@@ -42,10 +43,7 @@ public sealed class ControllerConnectionService : BackgroundService
 			}
 			finally
 			{
-				if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-				{
-					await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Agent closing connection.", CancellationToken.None);
-				}
+				await CloseSocketAsync(socket);
 			}
 
 			if (!stoppingToken.IsCancellationRequested)
@@ -60,6 +58,7 @@ public sealed class ControllerConnectionService : BackgroundService
 	{
 		if (!AvatarProtocolJson.TryDeserializePayload<CommandRequest>(envelope, out var command, out var parseError) || command is null)
 		{
+			_logger.LogWarning("Failed to deserialize command payload: {Error}", parseError);
 			await SendErrorAsync(socket, envelope.RequestId, parseError, cancellationToken);
 			return;
 		}
@@ -85,12 +84,7 @@ public sealed class ControllerConnectionService : BackgroundService
 				AvatarProtocolJson.CreateEnvelope(
 					AvatarMessageType.Result,
 					envelope.RequestId,
-					new CommandResultPayload
-					{
-						Status = CommandResultStatus.Ok.ToProtocolValue(),
-						ElapsedMs = elapsedMs,
-						Message = executionResult.Message
-					}),
+					CommandResultPayload.FromStatus(CommandResultStatus.Ok, elapsedMs, executionResult.Message)),
 				cancellationToken);
 		}
 		catch (ArgumentException exception)
@@ -117,15 +111,17 @@ public sealed class ControllerConnectionService : BackgroundService
 				break;
 			}
 
-			_logger.LogInformation("Received: {Payload}", incoming);
+			_logger.LogDebug("Received raw message from controller: {Payload}", incoming);
 			if (!AvatarProtocolJson.TryDeserializeEnvelope(incoming, out var envelope, out var parseError) || envelope is null)
 			{
+				_logger.LogWarning("Failed to deserialize controller envelope: {Error}", parseError);
 				await SendErrorAsync(socket, null, parseError, cancellationToken);
 				continue;
 			}
 
-			if (!AvatarMessageTypeExtensions.TryParseProtocolValue(envelope.Type, out var messageType))
+			if (!envelope.TryGetMessageType(out var messageType))
 			{
+				_logger.LogWarning("Controller sent unsupported message type: {Type}", envelope.Type);
 				await SendErrorAsync(socket, envelope.RequestId, $"Unsupported message type '{envelope.Type}'.", cancellationToken);
 				continue;
 			}
@@ -167,7 +163,15 @@ public sealed class ControllerConnectionService : BackgroundService
 
 		var json = AvatarProtocolJson.Serialize(envelope);
 		await WebSocketTextMessageCodec.SendTextAsync(socket, json, cancellationToken);
-		_logger.LogInformation("Sent {MessageType} (requestId: {RequestId}).", envelope.Type, envelope.RequestId ?? "none");
+		if (envelope.TryGetMessageType(out var messageType) && messageType == AvatarMessageType.Heartbeat)
+		{
+			_logger.LogDebug("Sent {MessageType} (requestId: {RequestId}).", envelope.Type, envelope.RequestId ?? "none");
+		}
+		else
+		{
+			_logger.LogInformation("Sent {MessageType} (requestId: {RequestId}).", envelope.Type, envelope.RequestId ?? "none");
+		}
+		_logger.LogDebug("Sent raw message to controller: {Payload}", json);
 	}
 
 	private Task SendErrorAsync(ClientWebSocket socket, string? requestId, string message, CancellationToken cancellationToken)
@@ -199,5 +203,25 @@ public sealed class ControllerConnectionService : BackgroundService
 					Version = _options.Version
 				}),
 			cancellationToken);
+	}
+
+	private async Task CloseSocketAsync(ClientWebSocket socket)
+	{
+		try
+		{
+			if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+			{
+				await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Agent closing connection.", CancellationToken.None);
+			}
+			else if (socket.State is not WebSocketState.Closed and not WebSocketState.Aborted and not WebSocketState.None)
+			{
+				socket.Abort();
+			}
+		}
+		catch (Exception exception)
+		{
+			_logger.LogDebug(exception, "WebSocket close handshake failed.");
+			socket.Abort();
+		}
 	}
 }
