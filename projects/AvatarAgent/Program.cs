@@ -17,13 +17,17 @@ builder.WebHost.UseUrls(
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-builder.Services.AddProblemDetails();
 builder.Services.AddSingleton<MouseController>();
 builder.Services.AddSingleton<KeyboardController>();
 builder.Services.AddSingleton<ICommandExecutor, CommandExecutor>();
 
 var app = builder.Build();
 
-app.MapCommandEndpoints();
+app.UseWebSockets(new WebSocketOptions
+{
+	KeepAliveInterval = TimeSpan.FromSeconds(120)
+});
+
+app.MapWebSocketEndpoints();
 
 app.Run();

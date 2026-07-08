@@ -1,8 +1,8 @@
 # AvatarAgent
 
-Lightweight Windows-only remote control API built with ASP.NET Core Minimal API.
+Lightweight Windows-only remote control service built with ASP.NET Core Minimal API and a WebSocket command channel.
 
-The service listens on the local network and exposes a small HTTP API for mouse and keyboard control. It is intentionally kept simple, unauthenticated, and easy to extend.
+The service listens on the local network and exposes a WebSocket endpoint for mouse and keyboard control. It is intentionally kept simple, unauthenticated, and easy to extend.
 
 ## Project layout
 
@@ -15,7 +15,7 @@ AvatarAgent/
 │   ├── CommandExecutor.cs
 │   └── ICommandExecutor.cs
 ├── Endpoints/
-│   └── CommandEndpoints.cs
+│   └── WebSocketEndpoints.cs
 ├── Win32/
 │   ├── KeyboardController.cs
 │   └── MouseController.cs
@@ -29,21 +29,17 @@ AvatarAgent/
 - Default bind address: `http://0.0.0.0:5050`
 - Override bind address with environment variable `AVATAR_AGENT_URLS`
 
-## Endpoints
+## WebSocket protocol
 
-### `GET /health`
+### Connect
 
-Response:
+- Endpoint: `ws://<host>:5050/ws`
 
-```json
-{
-  "status": "ok"
-}
-```
+Each text message must be a JSON command payload.
 
-### `POST /command`
+### Command message format
 
-Request body:
+Send JSON like:
 
 ```json
 {
@@ -95,7 +91,7 @@ Examples:
 }
 ```
 
-Example success response:
+### Success response
 
 ```json
 {
@@ -106,13 +102,28 @@ Example success response:
 }
 ```
 
-Invalid requests return HTTP `400` with JSON validation details.
+### Error response
+
+Validation and execution failures are returned as JSON error messages over the same WebSocket connection.
+
+```json
+{
+  "status": "error",
+  "action": "MoveMouse",
+  "error": "Invalid command request.",
+  "errors": {
+    "x": ["X is required for MoveMouse."],
+    "y": ["Y is required for MoveMouse."]
+  },
+  "elapsedMs": 0.52
+}
+```
 
 ## Logging
 
-The API logs:
+The service logs:
 
-- incoming requests
+- incoming websocket command messages
 - execution time
 - success and failure outcomes
 
@@ -142,6 +153,6 @@ The project is configured for self-contained `win-x64` builds.
 
 ## Notes
 
-- This API is intentionally unauthenticated. Run it only on trusted local networks.
+- This service is intentionally unauthenticated. Run it only on trusted local networks.
 - Windows Firewall rules may need to be adjusted to allow inbound access on the chosen port.
 - The current design leaves room for future additions such as screenshots, WebSockets, authentication, OCR, UI Automation, multi-monitor support, and LLM integrations without changing the public command endpoint shape.
