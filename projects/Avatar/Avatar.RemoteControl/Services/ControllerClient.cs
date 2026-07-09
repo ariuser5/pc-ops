@@ -31,7 +31,7 @@ public class ControllerClient
         }
     }
 
-    public async Task<bool> SendCommandAsync(string agentId, string action, int x = 0, int y = 0, string? key = null)
+    public async Task<bool> SendCommandAsync(string agentId, string action, int? x = null, int? y = null, string? key = null)
     {
         try
         {
@@ -60,7 +60,7 @@ public class ControllerClient
             return false;
         }
     }
-
+    
     private static JsonSerializerOptions JsonOptions => new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

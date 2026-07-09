@@ -82,7 +82,7 @@ public class InteractiveShell
                     await HandleMoveMouseAsync(agent.AgentId);
                     break;
                 case "2":
-                    if (await _client.SendCommandAsync(agent.AgentId, "Click"))
+                    if (await _client.SendCommandAsync(agent.AgentId, "LeftClick"))
                         Console.WriteLine("  ✓ Click sent.");
                     else
                         Console.WriteLine("  ✗ Failed to send click.");
