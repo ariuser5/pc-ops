@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AvatarAgent", "AvatarAgent\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Avatar.Tests", "Avatar.Tests\Avatar.Tests.csproj", "{5BF1C875-ADDA-4224-B9C9-C54DEC96B4E0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Avatar.RemoteControl", "Avatar.RemoteControl\Avatar.RemoteControl.csproj", "{118E1213-084E-40CA-95E0-DD45B6282A83}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{5BF1C875-ADDA-4224-B9C9-C54DEC96B4E0}.Release|x64.Build.0 = Release|Any CPU
 		{5BF1C875-ADDA-4224-B9C9-C54DEC96B4E0}.Release|x86.ActiveCfg = Release|Any CPU
 		{5BF1C875-ADDA-4224-B9C9-C54DEC96B4E0}.Release|x86.Build.0 = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|x64.Build.0 = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Debug|x86.Build.0 = Debug|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|Any CPU.Build.0 = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|x64.ActiveCfg = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|x64.Build.0 = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|x86.ActiveCfg = Release|Any CPU
+		{118E1213-084E-40CA-95E0-DD45B6282A83}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
