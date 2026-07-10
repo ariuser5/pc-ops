@@ -60,15 +60,6 @@ dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --t
 - `--refresh-state`: rebuild `tracker-state.json` from the event log before running a command. You can also run it by itself.
 - `help`: show help.
 
-Legacy compatibility aliases still work, but they are no longer the documented API:
-
-- `set-task` maps to `task set`
-- `edit-interval` maps to bounded `task set --from ... --to ...`
-- `set-break` maps to `break set`
-- `break add` still works as an alias for `break set`
-- `set-hours` maps to `hours set`
-- `recording stop` and `recording resume` still work as aliases for `stop` and `resume`
-
 ## Tracking Model
 
 Date selectors accept `yyyy-MM-dd`, `.`, `today`, `yesterday`, or `-Nd` (for example, `-2d`). On bounded task and one-off break commands, `--date` applies only to time-only `--from` and `--to` values. Full timestamps remain supported without `--date`, including for intervals spanning different dates.

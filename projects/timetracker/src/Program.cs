@@ -51,12 +51,6 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	public int EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
-	{
-		WriteLines([_reportService.SetTaskInterval(taskName, from, to).Message]);
-		return 0;
-	}
-
 	public int SetBreak(DateTimeOffset from, DateTimeOffset to)
 	{
 		WriteLines([_reportService.SetBreak(from, to).Message]);
@@ -141,11 +135,6 @@ internal sealed class TimeTrackerCli
 
 		WriteLines([_reportService.SetTask(effectiveTaskName, from).Message]);
 		return 0;
-	}
-
-	public int SetTask(string? taskName, DateTimeOffset? since)
-	{
-		return SetTaskFromApi(taskName, since, null);
 	}
 
 	public int SetWorkingHours(TimeOnly start, TimeOnly end)
@@ -483,18 +472,12 @@ internal static class CommandFactory
 		rootCommand.Add(CreateResumeCommand(app));
 		rootCommand.Add(CreateReportCommand(app));
 
-		rootCommand.Add(CreateRecordingCommand(app));
-		rootCommand.Add(CreateLegacySetTaskCommand(app));
-		rootCommand.Add(CreateLegacyEditIntervalCommand(app));
-		rootCommand.Add(CreateLegacySetBreakCommand(app));
-		rootCommand.Add(CreateLegacySetHoursCommand(app));
-
 		return rootCommand;
 	}
 
 	private static Option<bool> CreateRefreshStateOption()
 	{
-		var option = new Option<bool>("--refresh-state", ["--force-sync"]);
+		var option = new Option<bool>("--refresh-state");
 		option.Description = "Rebuild tracker-state.json from the event log before running the command.";
 		return option;
 	}
@@ -507,42 +490,12 @@ internal static class CommandFactory
 		return option;
 	}
 
-	private static Command CreateBreakAddCommand(TimeTrackerCli app)
-	{
-		var fromOption = new Option<ParsedMoment>("--from");
-		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		fromOption.CustomParser = ParseRequiredMomentOption;
-		fromOption.Required = true;
-
-		var toOption = new Option<ParsedMoment>("--to");
-		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		toOption.CustomParser = ParseRequiredMomentOption;
-		toOption.Required = true;
-
-		var dateOption = CreateTargetDateOption();
-
-		var command = new Command("add", "Subtract a break interval from tracked work time.");
-		command.Hidden = true;
-		command.Add(fromOption);
-		command.Add(toOption);
-		command.Add(dateOption);
-		command.SetAction(parseResult =>
-		{
-			var targetDate = parseResult.GetValue(dateOption);
-			return app.SetBreak(
-				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
-				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"));
-		});
-		return command;
-	}
-
 	private static Command CreateBreakCommand(TimeTrackerCli app)
 	{
 		var command = new Command("break", "Manage break intervals.");
 		command.Add(CreateBreakListCommand(app));
 		command.Add(CreateBreakRemoveCommand(app));
 		command.Add(CreateBreakSetCommand(app));
-		command.Add(CreateBreakAddCommand(app));
 		return command;
 	}
 
@@ -669,41 +622,6 @@ internal static class CommandFactory
 		return command;
 	}
 
-	private static Command CreateLegacyEditIntervalCommand(TimeTrackerCli app)
-	{
-		var fromOption = new Option<ParsedMoment>("--from");
-		fromOption.Description = "Interval start as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		fromOption.CustomParser = ParseRequiredMomentOption;
-		fromOption.Required = true;
-
-		var toOption = new Option<ParsedMoment>("--to");
-		toOption.Description = "Interval end as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		toOption.CustomParser = ParseRequiredMomentOption;
-		toOption.Required = true;
-
-		var dateOption = CreateTargetDateOption();
-
-		var taskOption = new Option<string>("--task");
-		taskOption.Description = "Task name to assign to the interval.";
-		taskOption.Required = true;
-
-		var command = new Command("edit-interval", "Assign a bounded past interval to a task without changing the current task.");
-		command.Hidden = true;
-		command.Add(fromOption);
-		command.Add(toOption);
-		command.Add(dateOption);
-		command.Add(taskOption);
-		command.SetAction(parseResult =>
-		{
-			var targetDate = parseResult.GetValue(dateOption);
-			return app.EditInterval(
-				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
-				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"),
-				parseResult.GetValue(taskOption) ?? string.Empty);
-		});
-		return command;
-	}
-
 	private static Command CreateReportCommand(TimeTrackerCli app)
 	{
 		var fromOption = new Option<DateOnly?>("--from");
@@ -753,108 +671,6 @@ internal static class CommandFactory
 			period,
 			parseResult.GetValue(offsetOption),
 			parseResult.GetValue(detailedOption)));
-		return command;
-	}
-
-	private static Command CreateLegacyResumeCommand(TimeTrackerCli app)
-	{
-		var command = new Command("resume", "Resume automatic workday allocation.");
-		command.Hidden = true;
-		command.SetAction(_ => app.ResumeRecording());
-		return command;
-	}
-
-	private static Command CreateLegacySetBreakCommand(TimeTrackerCli app)
-	{
-		var fromOption = new Option<ParsedMoment>("--from");
-		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		fromOption.CustomParser = ParseRequiredMomentOption;
-		fromOption.Required = true;
-
-		var toOption = new Option<ParsedMoment>("--to");
-		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
-		toOption.CustomParser = ParseRequiredMomentOption;
-		toOption.Required = true;
-
-		var dateOption = CreateTargetDateOption();
-
-		var command = new Command("set-break", "Subtract a break interval from tracked work time.");
-		command.Hidden = true;
-		command.Add(fromOption);
-		command.Add(toOption);
-		command.Add(dateOption);
-		command.SetAction(parseResult =>
-		{
-			var targetDate = parseResult.GetValue(dateOption);
-			return app.SetBreak(
-				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
-				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"));
-		});
-		return command;
-	}
-
-	private static Command CreateLegacySetHoursCommand(TimeTrackerCli app)
-	{
-		var startArgument = new Argument<TimeOnly>("start");
-		startArgument.Description = "Workday start in HH:mm format.";
-		startArgument.CustomParser = ParseTimeArgument;
-
-		var endArgument = new Argument<TimeOnly>("end");
-		endArgument.Description = "Workday end in HH:mm format.";
-		endArgument.CustomParser = ParseTimeArgument;
-
-		var command = new Command("set-hours", "Set working hours in HH:mm format.");
-		command.Hidden = true;
-		command.Add(startArgument);
-		command.Add(endArgument);
-		command.SetAction(parseResult => app.SetWorkingHours(
-			parseResult.GetValue(startArgument),
-			parseResult.GetValue(endArgument)));
-		return command;
-	}
-
-	private static Command CreateLegacySetTaskCommand(TimeTrackerCli app)
-	{
-		var sinceOption = new Option<ParsedMoment?>("--since");
-		sinceOption.Description = "Backdate the start of the task using HH:mm for today or yyyy-MM-ddTHH:mm.";
-		sinceOption.CustomParser = ParseOptionalMomentOption;
-
-		var taskArgument = new Argument<string?>("task-name")
-		{
-			Description = "Task name to make current."
-		};
-		taskArgument.Arity = ArgumentArity.ZeroOrOne;
-
-		var command = new Command("set-task", "Set the current task.");
-		command.Hidden = true;
-		command.Add(sinceOption);
-		command.Add(taskArgument);
-		command.SetAction(parseResult => app.SetTask(
-			parseResult.GetValue(taskArgument),
-			ResolveMoment(parseResult.GetValue(sinceOption), targetDate: null, "--since")));
-		return command;
-	}
-
-	private static Command CreateRecordingCommand(TimeTrackerCli app)
-	{
-		var command = new Command("recording", "Control whether time allocation is active.");
-		command.Hidden = true;
-		command.Add(CreateRecordingStopCommand(app));
-		command.Add(CreateRecordingResumeCommand(app));
-		return command;
-	}
-
-	private static Command CreateRecordingResumeCommand(TimeTrackerCli app)
-	{
-		var command = new Command("resume", "Resume automatic workday allocation.");
-		command.SetAction(_ => app.ResumeRecording());
-		return command;
-	}
-
-	private static Command CreateRecordingStopCommand(TimeTrackerCli app)
-	{
-		var command = new Command("stop", "Pause automatic workday allocation.");
-		command.SetAction(_ => app.StopRecording());
 		return command;
 	}
 
@@ -1030,18 +846,6 @@ internal static class CommandFactory
 			return default;
 		}
 
-		var rawValue = argumentResult.Tokens.Single().Value;
-		if (TryParseTime(rawValue, out var time))
-		{
-			return time;
-		}
-
-		argumentResult.AddError($"Invalid time '{NormalizeTimeSeparators(rawValue)}'. Use HH:mm.");
-		return default;
-	}
-
-	private static TimeOnly ParseTimeArgument(ArgumentResult argumentResult)
-	{
 		var rawValue = argumentResult.Tokens.Single().Value;
 		if (TryParseTime(rawValue, out var time))
 		{

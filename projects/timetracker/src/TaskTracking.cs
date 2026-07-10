@@ -74,11 +74,6 @@ internal sealed class DailyTaskReportService
 		return new TrackerMutationResult(true, "Recording resumed.", updatedState);
 	}
 
-	public TrackerMutationResult EditInterval(DateTimeOffset from, DateTimeOffset to, string taskName)
-	{
-		return SetTaskInterval(taskName, from, to);
-	}
-
 	public TrackerMutationResult SetTaskInterval(string taskName, DateTimeOffset from, DateTimeOffset to)
 	{
 		if (to <= from)
