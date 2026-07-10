@@ -172,11 +172,16 @@ internal sealed class TimeTrackerCli
 		return 0;
 	}
 
-	public int ShowReport(DateOnly? fromDate, DateOnly? toDate, bool detailed)
+	public int ShowReport(DateOnly? fromDate, DateOnly? toDate, DateOnly? date, bool detailed)
 	{
+		if (date is not null && (fromDate is not null || toDate is not null))
+		{
+			throw new ArgumentException("The --date option cannot be combined with --from or --to.");
+		}
+
 		var reportDate = DateOnly.FromDateTime(DateTime.Now);
-		var effectiveFromDate = fromDate ?? toDate ?? reportDate;
-		var effectiveToDate = toDate ?? reportDate;
+		var effectiveFromDate = date ?? fromDate ?? toDate ?? reportDate;
+		var effectiveToDate = date ?? toDate ?? reportDate;
 
 		if (effectiveToDate < effectiveFromDate)
 		{
@@ -190,6 +195,54 @@ internal sealed class TimeTrackerCli
 			? FormatDetailedTimetrack(_reportService.BuildDetailedRangeSummary(effectiveFromDate, effectiveToDate, now), currentState)
 			: FormatTimetrack(_reportService.BuildRangeSummary(effectiveFromDate, effectiveToDate, now), currentState));
 		return 0;
+	}
+
+	public int ShowPeriodReport(ReportPeriod period, int offset, bool detailed)
+	{
+		if (offset > 0)
+		{
+			throw new ArgumentOutOfRangeException(nameof(offset), offset, "Report period offset must be zero or negative.");
+		}
+
+		var today = DateOnly.FromDateTime(DateTime.Now);
+		DateOnly start;
+		DateOnly end;
+
+		try
+		{
+			switch (period)
+			{
+				case ReportPeriod.Day:
+					start = today.AddDays(offset);
+					end = start;
+					break;
+				case ReportPeriod.Week:
+					var currentWeekStart = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+					start = currentWeekStart.AddDays(checked(offset * 7));
+					end = offset == 0 ? today : start.AddDays(6);
+					break;
+				case ReportPeriod.Month:
+					start = new DateOnly(today.Year, today.Month, 1).AddMonths(offset);
+					end = offset == 0 ? today : start.AddMonths(1).AddDays(-1);
+					break;
+				case ReportPeriod.Year:
+					start = new DateOnly(today.Year, 1, 1).AddYears(offset);
+					end = offset == 0 ? today : start.AddYears(1).AddDays(-1);
+					break;
+				default:
+					throw new ArgumentOutOfRangeException(nameof(period), period, "Unsupported report period.");
+			}
+		}
+		catch (OverflowException)
+		{
+			throw new ArgumentOutOfRangeException(nameof(offset), offset, "Report period offset is outside the supported date range.");
+		}
+		catch (ArgumentOutOfRangeException exception) when (exception.ParamName != nameof(period))
+		{
+			throw new ArgumentOutOfRangeException(nameof(offset), offset, "Report period offset is outside the supported date range.");
+		}
+
+		return ShowReport(start, end, date: null, detailed);
 	}
 
 	private IReadOnlyList<string> FormatStatus(TrackerState state, DateTimeOffset? currentTaskSince, IReadOnlyList<BreakIntervalEntry> breakIntervals, TimetrackSnapshot todaySnapshot)
@@ -661,16 +714,44 @@ internal static class CommandFactory
 		toOption.Description = "End date: yyyy-MM-dd, ., today, yesterday, or -Nd; defaults to today when --from is provided.";
 		toOption.CustomParser = ParseDateOption;
 
+		var dateOption = new Option<DateOnly?>("--date");
+		dateOption.Description = "Show one date: yyyy-MM-dd, ., today, yesterday, or -Nd.";
+		dateOption.CustomParser = ParseDateOption;
+
 		var detailedOption = new Option<bool>("--detailed");
 		detailedOption.Description = "Show a per-day breakdown followed by interval totals.";
 
 		var command = new Command("report", "Show totals for a date interval; defaults to today.");
 		command.Add(fromOption);
 		command.Add(toOption);
+		command.Add(dateOption);
 		command.Add(detailedOption);
+		command.Add(CreatePeriodReportCommand(app, "day", ReportPeriod.Day, "Show a calendar day; defaults to today."));
+		command.Add(CreatePeriodReportCommand(app, "week", ReportPeriod.Week, "Show a Monday-based calendar week; defaults to the current week through today."));
+		command.Add(CreatePeriodReportCommand(app, "month", ReportPeriod.Month, "Show a calendar month; defaults to the current month through today."));
+		command.Add(CreatePeriodReportCommand(app, "year", ReportPeriod.Year, "Show a calendar year; defaults to the current year through today."));
 		command.SetAction(parseResult => app.ShowReport(
 			parseResult.GetValue(fromOption),
 			parseResult.GetValue(toOption),
+			parseResult.GetValue(dateOption),
+			parseResult.GetValue(detailedOption)));
+		return command;
+	}
+
+	private static Command CreatePeriodReportCommand(TimeTrackerCli app, string name, ReportPeriod period, string description)
+	{
+		var offsetOption = new Option<int>("--offset");
+		offsetOption.Description = "Calendar period offset: 0 is current, -1 is previous, -2 is two periods ago.";
+
+		var detailedOption = new Option<bool>("--detailed");
+		detailedOption.Description = "Show a per-day breakdown followed by interval totals.";
+
+		var command = new Command(name, description);
+		command.Add(offsetOption);
+		command.Add(detailedOption);
+		command.SetAction(parseResult => app.ShowPeriodReport(
+			period,
+			parseResult.GetValue(offsetOption),
 			parseResult.GetValue(detailedOption)));
 		return command;
 	}
@@ -1033,3 +1114,11 @@ internal static class CommandFactory
 }
 
 internal readonly record struct ParsedMoment(DateTimeOffset Timestamp, bool HasExplicitDate);
+
+internal enum ReportPeriod
+{
+	Day,
+	Week,
+	Month,
+	Year
+}

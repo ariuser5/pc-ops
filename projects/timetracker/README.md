@@ -31,6 +31,12 @@ dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- stop
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- resume
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --date 2026-07-01
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --date -1d
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report week
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report week --offset -1
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report month --detailed
+dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report month --offset -2
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --from 2026-07-01 --to 2026-07-31 --detailed
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --to .
 dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --to TODAY
@@ -49,7 +55,8 @@ dotnet run --project ./projects/timetracker/src/TimeTracker.csproj -- report --t
 - `hours set --from HH:mm|HH;mm --to HH:mm|HH;mm`: set working hours.
 - `stop`: pause automatic workday allocation.
 - `resume`: resume automatic workday allocation.
-- `report [--from <date>] [--to <date>] [--detailed]`: show a time summary for a date interval using the date selectors described below. When `--from` is provided without `--to`, the interval ends today. With `--detailed`, the output includes a per-day breakdown followed by interval totals per task. If no dates are provided, it reports today.
+- `report [--date <date>] [--from <date>] [--to <date>] [--detailed]`: show a time summary using the date selectors described below. `--date` selects exactly one day and cannot be combined with `--from` or `--to`. When `--from` is provided without `--to`, the interval ends today. With `--detailed`, the output includes a per-day breakdown followed by interval totals per task. If no dates are provided, it reports today.
+- `report day|week|month|year [--offset <N>] [--detailed]`: show a local calendar period. The offset defaults to `0` for the current period; `-1` selects the previous period, `-2` selects two periods ago, and positive offsets are rejected. Current periods end today, while past periods include their complete calendar range. Weeks start on Monday.
 - `--refresh-state`: rebuild `tracker-state.json` from the event log before running a command. You can also run it by itself.
 - `help`: show help.
 
