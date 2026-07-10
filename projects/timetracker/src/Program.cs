@@ -446,25 +446,40 @@ internal static class CommandFactory
 		return option;
 	}
 
+	private static Option<DateOnly?> CreateTargetDateOption()
+	{
+		var option = new Option<DateOnly?>("--date");
+		option.Description = "Date for time-only interval values: yyyy-MM-dd, ., today, yesterday, or -Nd.";
+		option.CustomParser = ParseDateOption;
+		return option;
+	}
+
 	private static Command CreateBreakAddCommand(TimeTrackerCli app)
 	{
-		var fromOption = new Option<DateTimeOffset>("--from");
+		var fromOption = new Option<ParsedMoment>("--from");
 		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseRequiredMomentOption;
 		fromOption.Required = true;
 
-		var toOption = new Option<DateTimeOffset>("--to");
+		var toOption = new Option<ParsedMoment>("--to");
 		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseRequiredMomentOption;
 		toOption.Required = true;
+
+		var dateOption = CreateTargetDateOption();
 
 		var command = new Command("add", "Subtract a break interval from tracked work time.");
 		command.Hidden = true;
 		command.Add(fromOption);
 		command.Add(toOption);
-		command.SetAction(parseResult => app.SetBreak(
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption)));
+		command.Add(dateOption);
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			return app.SetBreak(
+				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
+				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"));
+		});
 		return command;
 	}
 
@@ -491,15 +506,17 @@ internal static class CommandFactory
 
 	private static Command CreateBreakSetCommand(TimeTrackerCli app)
 	{
-		var fromOption = new Option<DateTimeOffset>("--from");
+		var fromOption = new Option<ParsedMoment>("--from");
 		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseRequiredMomentOption;
 		fromOption.Required = true;
 
-		var toOption = new Option<DateTimeOffset>("--to");
+		var toOption = new Option<ParsedMoment>("--to");
 		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseRequiredMomentOption;
 		toOption.Required = true;
+
+		var dateOption = CreateTargetDateOption();
 
 		var dailyOption = new Option<bool>("--daily");
 		dailyOption.Description = "Treat the break as a recurring daily break rule.";
@@ -510,13 +527,24 @@ internal static class CommandFactory
 		var command = new Command("set", "Set a break interval by subtracting it from tracked work time.");
 		command.Add(fromOption);
 		command.Add(toOption);
+		command.Add(dateOption);
 		command.Add(dailyOption);
 		command.Add(nameOption);
-		command.SetAction(parseResult => app.SetBreakFromApi(
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption),
-			parseResult.GetValue(dailyOption),
-			parseResult.GetValue(nameOption)));
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			var daily = parseResult.GetValue(dailyOption);
+			if (daily && targetDate is not null)
+			{
+				throw new ArgumentException("The --date option applies to one-off breaks and cannot be combined with --daily.");
+			}
+
+			return app.SetBreakFromApi(
+				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
+				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"),
+				daily,
+				parseResult.GetValue(nameOption));
+		});
 		return command;
 	}
 
@@ -528,22 +556,35 @@ internal static class CommandFactory
 		};
 		idArgument.Arity = ArgumentArity.ZeroOrOne;
 
-		var fromOption = new Option<DateTimeOffset?>("--from");
+		var fromOption = new Option<ParsedMoment?>("--from");
 		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseOptionalMomentOption;
 
-		var toOption = new Option<DateTimeOffset?>("--to");
+		var toOption = new Option<ParsedMoment?>("--to");
 		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseOptionalMomentOption;
+
+		var dateOption = CreateTargetDateOption();
 
 		var command = new Command("remove", "Remove a one-off break interval by --from/--to, or remove a recurring daily break rule by id.");
 		command.Add(idArgument);
 		command.Add(fromOption);
 		command.Add(toOption);
-		command.SetAction(parseResult => app.RemoveBreakFromApi(
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption),
-			parseResult.GetValue(idArgument)));
+		command.Add(dateOption);
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			var breakRuleId = parseResult.GetValue(idArgument);
+			if (targetDate is not null && !string.IsNullOrWhiteSpace(breakRuleId))
+			{
+				throw new ArgumentException("The --date option applies to one-off break intervals and cannot be combined with a recurring break id.");
+			}
+
+			return app.RemoveBreakFromApi(
+				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
+				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"),
+				breakRuleId);
+		});
 		return command;
 	}
 
@@ -577,15 +618,17 @@ internal static class CommandFactory
 
 	private static Command CreateLegacyEditIntervalCommand(TimeTrackerCli app)
 	{
-		var fromOption = new Option<DateTimeOffset>("--from");
+		var fromOption = new Option<ParsedMoment>("--from");
 		fromOption.Description = "Interval start as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseRequiredMomentOption;
 		fromOption.Required = true;
 
-		var toOption = new Option<DateTimeOffset>("--to");
+		var toOption = new Option<ParsedMoment>("--to");
 		toOption.Description = "Interval end as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseRequiredMomentOption;
 		toOption.Required = true;
+
+		var dateOption = CreateTargetDateOption();
 
 		var taskOption = new Option<string>("--task");
 		taskOption.Description = "Task name to assign to the interval.";
@@ -595,22 +638,27 @@ internal static class CommandFactory
 		command.Hidden = true;
 		command.Add(fromOption);
 		command.Add(toOption);
+		command.Add(dateOption);
 		command.Add(taskOption);
-		command.SetAction(parseResult => app.EditInterval(
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption),
-			parseResult.GetValue(taskOption) ?? string.Empty));
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			return app.EditInterval(
+				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
+				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"),
+				parseResult.GetValue(taskOption) ?? string.Empty);
+		});
 		return command;
 	}
 
 	private static Command CreateReportCommand(TimeTrackerCli app)
 	{
 		var fromOption = new Option<DateOnly?>("--from");
-		fromOption.Description = "Start date in yyyy-MM-dd format.";
+		fromOption.Description = "Start date: yyyy-MM-dd, ., today, yesterday, or -Nd.";
 		fromOption.CustomParser = ParseDateOption;
 
 		var toOption = new Option<DateOnly?>("--to");
-		toOption.Description = "End date in yyyy-MM-dd format; defaults to today when --from is provided.";
+		toOption.Description = "End date: yyyy-MM-dd, ., today, yesterday, or -Nd; defaults to today when --from is provided.";
 		toOption.CustomParser = ParseDateOption;
 
 		var detailedOption = new Option<bool>("--detailed");
@@ -637,23 +685,30 @@ internal static class CommandFactory
 
 	private static Command CreateLegacySetBreakCommand(TimeTrackerCli app)
 	{
-		var fromOption = new Option<DateTimeOffset>("--from");
+		var fromOption = new Option<ParsedMoment>("--from");
 		fromOption.Description = "Break start as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseRequiredMomentOption;
 		fromOption.Required = true;
 
-		var toOption = new Option<DateTimeOffset>("--to");
+		var toOption = new Option<ParsedMoment>("--to");
 		toOption.Description = "Break end as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseRequiredMomentOption;
 		toOption.Required = true;
+
+		var dateOption = CreateTargetDateOption();
 
 		var command = new Command("set-break", "Subtract a break interval from tracked work time.");
 		command.Hidden = true;
 		command.Add(fromOption);
 		command.Add(toOption);
-		command.SetAction(parseResult => app.SetBreak(
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption)));
+		command.Add(dateOption);
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			return app.SetBreak(
+				ResolveMoment(parseResult.GetValue(fromOption), targetDate, "--from"),
+				ResolveMoment(parseResult.GetValue(toOption), targetDate, "--to"));
+		});
 		return command;
 	}
 
@@ -679,7 +734,7 @@ internal static class CommandFactory
 
 	private static Command CreateLegacySetTaskCommand(TimeTrackerCli app)
 	{
-		var sinceOption = new Option<DateTimeOffset?>("--since");
+		var sinceOption = new Option<ParsedMoment?>("--since");
 		sinceOption.Description = "Backdate the start of the task using HH:mm for today or yyyy-MM-ddTHH:mm.";
 		sinceOption.CustomParser = ParseOptionalMomentOption;
 
@@ -695,7 +750,7 @@ internal static class CommandFactory
 		command.Add(taskArgument);
 		command.SetAction(parseResult => app.SetTask(
 			parseResult.GetValue(taskArgument),
-			parseResult.GetValue(sinceOption)));
+			ResolveMoment(parseResult.GetValue(sinceOption), targetDate: null, "--since")));
 		return command;
 	}
 
@@ -731,13 +786,15 @@ internal static class CommandFactory
 
 	private static Command CreateTaskSetCommand(TimeTrackerCli app)
 	{
-		var fromOption = new Option<DateTimeOffset?>("--from");
+		var fromOption = new Option<ParsedMoment?>("--from");
 		fromOption.Description = "Start time as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		fromOption.CustomParser = ParseOptionalMomentOption;
 
-		var toOption = new Option<DateTimeOffset?>("--to");
+		var toOption = new Option<ParsedMoment?>("--to");
 		toOption.Description = "Optional end time as HH:mm for today or yyyy-MM-ddTHH:mm.";
 		toOption.CustomParser = ParseOptionalMomentOption;
+
+		var dateOption = CreateTargetDateOption();
 
 		var taskArgument = new Argument<string?>("task-name")
 		{
@@ -748,11 +805,31 @@ internal static class CommandFactory
 		var command = new Command("set", "Set the current task, or assign a bounded task interval when --to is provided.");
 		command.Add(fromOption);
 		command.Add(toOption);
+		command.Add(dateOption);
 		command.Add(taskArgument);
-		command.SetAction(parseResult => app.SetTaskFromApi(
-			parseResult.GetValue(taskArgument),
-			parseResult.GetValue(fromOption),
-			parseResult.GetValue(toOption)));
+		command.SetAction(parseResult =>
+		{
+			var targetDate = parseResult.GetValue(dateOption);
+			var parsedFrom = parseResult.GetValue(fromOption);
+			var parsedTo = parseResult.GetValue(toOption);
+			if (targetDate is not null && parsedFrom is null)
+			{
+				throw new ArgumentException("The --date option requires --from.");
+			}
+
+			var from = ResolveMoment(parsedFrom, targetDate, "--from");
+			var to = ResolveMoment(parsedTo, targetDate, "--to");
+			var today = DateOnly.FromDateTime(DateTime.Now);
+			if (targetDate < today && to is null)
+			{
+				throw new ArgumentException("A historical task correction requires --to so it does not change the current task across multiple days.");
+			}
+
+			return app.SetTaskFromApi(
+				parseResult.GetValue(taskArgument),
+				from,
+				to);
+		});
 		return command;
 	}
 
@@ -785,7 +862,7 @@ internal static class CommandFactory
 		}
 
 		var rawValue = argumentResult.Tokens.Single().Value;
-		if (TryParseReportDateAlias(rawValue, out var aliasedDate))
+		if (TryParseDateAlias(rawValue, out var aliasedDate))
 		{
 			return aliasedDate;
 		}
@@ -795,11 +872,11 @@ internal static class CommandFactory
 			return date;
 		}
 
-		argumentResult.AddError($"Invalid date '{rawValue}'. Use yyyy-MM-dd, '.' , or 'today'.");
+		argumentResult.AddError($"Invalid date '{rawValue}'. Use yyyy-MM-dd, '.', 'today', 'yesterday', or -Nd.");
 		return null;
 	}
 
-	private static bool TryParseReportDateAlias(string rawValue, out DateOnly date)
+	private static bool TryParseDateAlias(string rawValue, out DateOnly date)
 	{
 		if (rawValue == "." || string.Equals(rawValue, "today", StringComparison.OrdinalIgnoreCase))
 		{
@@ -807,11 +884,32 @@ internal static class CommandFactory
 			return true;
 		}
 
+		if (string.Equals(rawValue, "yesterday", StringComparison.OrdinalIgnoreCase))
+		{
+			date = DateOnly.FromDateTime(DateTime.Now).AddDays(-1);
+			return true;
+		}
+
+		if (rawValue.Length > 2
+			&& rawValue[0] == '-'
+			&& rawValue.EndsWith("d", StringComparison.OrdinalIgnoreCase)
+			&& int.TryParse(rawValue[1..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var daysAgo))
+		{
+			try
+			{
+				date = DateOnly.FromDateTime(DateTime.Now).AddDays(-daysAgo);
+				return true;
+			}
+			catch (ArgumentOutOfRangeException)
+			{
+			}
+		}
+
 		date = default;
 		return false;
 	}
 
-	private static DateTimeOffset? ParseOptionalMomentOption(ArgumentResult argumentResult)
+	private static ParsedMoment? ParseOptionalMomentOption(ArgumentResult argumentResult)
 	{
 		if (argumentResult.Tokens.Count == 0)
 		{
@@ -823,7 +921,7 @@ internal static class CommandFactory
 			: AddMomentParseError(argumentResult);
 	}
 
-	private static DateTimeOffset ParseRequiredMomentOption(ArgumentResult argumentResult)
+	private static ParsedMoment ParseRequiredMomentOption(ArgumentResult argumentResult)
 	{
 		if (argumentResult.Tokens.Count == 0)
 		{
@@ -836,7 +934,7 @@ internal static class CommandFactory
 			: AddMomentParseError(argumentResult) ?? default;
 	}
 
-	private static DateTimeOffset? AddMomentParseError(ArgumentResult argumentResult)
+	private static ParsedMoment? AddMomentParseError(ArgumentResult argumentResult)
 	{
 		var rawValue = argumentResult.Tokens.Single().Value;
 		argumentResult.AddError($"Invalid timestamp '{rawValue}'. Use HH:mm for today or yyyy-MM-ddTHH:mm.");
@@ -873,14 +971,14 @@ internal static class CommandFactory
 		return default;
 	}
 
-	private static bool TryParseMoment(string rawValue, out DateTimeOffset timestamp)
+	private static bool TryParseMoment(string rawValue, out ParsedMoment moment)
 	{
 		rawValue = NormalizeTimeSeparators(rawValue);
 
 		if (TimeOnly.TryParseExact(rawValue, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
 		{
 			var today = DateOnly.FromDateTime(DateTime.Now);
-			timestamp = new DateTimeOffset(today.ToDateTime(time, DateTimeKind.Local));
+			moment = new ParsedMoment(new DateTimeOffset(today.ToDateTime(time, DateTimeKind.Local)), HasExplicitDate: false);
 			return true;
 		}
 
@@ -894,12 +992,33 @@ internal static class CommandFactory
 
 		if (DateTime.TryParseExact(rawValue, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDateTime))
 		{
-			timestamp = new DateTimeOffset(DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Local));
+			moment = new ParsedMoment(new DateTimeOffset(DateTime.SpecifyKind(parsedDateTime, DateTimeKind.Local)), HasExplicitDate: true);
 			return true;
 		}
 
-		timestamp = default;
+		moment = default;
 		return false;
+	}
+
+	private static DateTimeOffset ResolveMoment(ParsedMoment moment, DateOnly? targetDate, string optionName)
+	{
+		if (targetDate is null)
+		{
+			return moment.Timestamp;
+		}
+
+		if (moment.HasExplicitDate)
+		{
+			throw new ArgumentException($"The {optionName} value already contains a date and cannot be combined with --date.");
+		}
+
+		var time = TimeOnly.FromDateTime(moment.Timestamp.LocalDateTime);
+		return new DateTimeOffset(targetDate.Value.ToDateTime(time, DateTimeKind.Local));
+	}
+
+	private static DateTimeOffset? ResolveMoment(ParsedMoment? moment, DateOnly? targetDate, string optionName)
+	{
+		return moment is null ? null : ResolveMoment(moment.Value, targetDate, optionName);
 	}
 
 	private static string NormalizeTimeSeparators(string rawValue)
@@ -912,3 +1031,5 @@ internal static class CommandFactory
 		return TimeOnly.TryParseExact(NormalizeTimeSeparators(rawValue), "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
 	}
 }
+
+internal readonly record struct ParsedMoment(DateTimeOffset Timestamp, bool HasExplicitDate);
