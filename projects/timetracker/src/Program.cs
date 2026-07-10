@@ -176,7 +176,7 @@ internal sealed class TimeTrackerCli
 	{
 		var reportDate = DateOnly.FromDateTime(DateTime.Now);
 		var effectiveFromDate = fromDate ?? toDate ?? reportDate;
-		var effectiveToDate = toDate ?? fromDate ?? effectiveFromDate;
+		var effectiveToDate = toDate ?? reportDate;
 
 		if (effectiveToDate < effectiveFromDate)
 		{
@@ -610,7 +610,7 @@ internal static class CommandFactory
 		fromOption.CustomParser = ParseDateOption;
 
 		var toOption = new Option<DateOnly?>("--to");
-		toOption.Description = "End date in yyyy-MM-dd format.";
+		toOption.Description = "End date in yyyy-MM-dd format; defaults to today when --from is provided.";
 		toOption.CustomParser = ParseDateOption;
 
 		var detailedOption = new Option<bool>("--detailed");
