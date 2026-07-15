@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 try
 {
@@ -35,10 +37,12 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	private readonly DesktopBannerService? _bannerService;
 	private readonly object _stateLock = new();
 	private readonly ThresholdState[] _thresholds;
+	private readonly Stopwatch _idleCooldownStopwatch = new();
 	private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
 	private readonly CancellationTokenSource _shutdown = new();
 
 	private bool _isStopped;
+	private bool _isWaitingForIdle;
 	private bool _shouldExit;
 	private int _lastRenderLineCount;
 	private TimeSpan _stoppedElapsed = TimeSpan.Zero;
@@ -49,8 +53,22 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		_config = config;
 		_configPath = configPath;
+
+		if (config.Mode == TimerMode.Auto && !OperatingSystem.IsWindows())
+		{
+			throw new PlatformNotSupportedException("Auto mode currently supports Windows only.");
+		}
+
 		_bannerService = DesktopBannerService.TryCreate(() => Reset("banner"));
 		_thresholds = config.Thresholds.Select(threshold => new ThresholdState(threshold)).ToArray();
+
+		if (config.Mode == TimerMode.Auto)
+		{
+			_stopwatch.Reset();
+			_idleCooldownStopwatch.Start();
+			_isWaitingForIdle = true;
+			_lastEventMessage = $"Waiting for {_config.IdleCooldown} of no input before starting timer.";
+		}
 	}
 
 	public int Run()
@@ -137,8 +155,9 @@ internal sealed class ActivityWatchdogApp : IDisposable
 		{
 			lock (_stateLock)
 			{
+				TryStartAfterIdleCooldown();
 				var elapsed = GetElapsed();
-				var activeThreshold = EvaluateThresholds(elapsed);
+				var activeThreshold = _isWaitingForIdle ? null : EvaluateThresholds(elapsed);
 				Render(elapsed, activeThreshold);
 			}
 
@@ -157,11 +176,25 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	{
 		lock (_stateLock)
 		{
-			_stopwatch.Restart();
+			if (_config.Mode == TimerMode.Auto)
+			{
+				_stopwatch.Reset();
+				_idleCooldownStopwatch.Restart();
+				_isWaitingForIdle = true;
+			}
+			else
+			{
+				_stopwatch.Restart();
+				_idleCooldownStopwatch.Reset();
+				_isWaitingForIdle = false;
+			}
+
 			_isStopped = false;
 			_stoppedElapsed = TimeSpan.Zero;
 			_lastResetAt = DateTimeOffset.Now;
-			_lastEventMessage = source == "banner" ? "Timer reset from banner." : "Timer reset.";
+			_lastEventMessage = _isWaitingForIdle
+				? $"Timer reset{(source == "banner" ? " from banner" : string.Empty)}; waiting for {_config.IdleCooldown} of no input."
+				: source == "banner" ? "Timer reset from banner." : "Timer reset.";
 
 			foreach (var threshold in _thresholds)
 			{
@@ -183,6 +216,7 @@ internal sealed class ActivityWatchdogApp : IDisposable
 			}
 
 			_stoppedElapsed = _stopwatch.Elapsed;
+			_isWaitingForIdle = false;
 			_isStopped = true;
 			_lastEventMessage = $"Timer stopped at {FormatElapsed(_stoppedElapsed)}.";
 			return true;
@@ -209,6 +243,22 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	private TimeSpan GetElapsed()
 	{
 		return _isStopped ? _stoppedElapsed : _stopwatch.Elapsed;
+	}
+
+	private void TryStartAfterIdleCooldown()
+	{
+		if (!_isWaitingForIdle
+			|| _idleCooldownStopwatch.Elapsed < _config.IdleCooldown
+			|| WindowsUserIdleTime.Get() < _config.IdleCooldown)
+		{
+			return;
+		}
+
+		_isWaitingForIdle = false;
+		_idleCooldownStopwatch.Reset();
+		_stopwatch.Restart();
+		_lastResetAt = DateTimeOffset.Now;
+		_lastEventMessage = $"Timer started automatically after {_config.IdleCooldown} of no input.";
 	}
 
 	private ThresholdState? EvaluateThresholds(TimeSpan elapsed)
@@ -269,12 +319,13 @@ internal sealed class ActivityWatchdogApp : IDisposable
 	private void Render(TimeSpan elapsed, ThresholdState? activeThreshold)
 	{
 		var width = GetRenderWidth();
-		var statusColor = _isStopped
+		var statusColor = _isStopped || _isWaitingForIdle
 			? ConsoleColor.DarkGray
 			: activeThreshold?.DisplayColor ?? ConsoleColor.Green;
 
 		var nextThreshold = _thresholds.FirstOrDefault(threshold => elapsed < threshold.Config.Duration);
-		var stateLine = $"State: {(_isStopped ? "stopped" : "running")} | Last reset: {_lastResetAt:yyyy-MM-dd HH:mm:ss}";
+		var state = _isStopped ? "stopped" : _isWaitingForIdle ? "waiting for idle" : "running";
+		var stateLine = $"State: {state} | Mode: {_config.Mode.ToString().ToLowerInvariant()} | Last start/reset: {_lastResetAt:yyyy-MM-dd HH:mm:ss}";
 
 		var lines = new List<(string Text, ConsoleColor? Color)>
 		{
@@ -447,7 +498,8 @@ internal static class AppConfigLoader
 	{
 		AllowTrailingCommas = true,
 		PropertyNameCaseInsensitive = true,
-		ReadCommentHandling = JsonCommentHandling.Skip
+		ReadCommentHandling = JsonCommentHandling.Skip,
+		Converters = { new JsonStringEnumConverter<TimerMode>(JsonNamingPolicy.CamelCase) }
 	};
 
 	public static AppConfig Load(string configPath)
@@ -468,11 +520,20 @@ internal sealed class AppConfig
 {
 	public int RefreshIntervalMs { get; set; } = 250;
 
+	public TimerMode Mode { get; set; } = TimerMode.Manual;
+
+	public TimeSpan IdleCooldown { get; set; } = TimeSpan.FromMinutes(1);
+
 	public List<ThresholdConfig> Thresholds { get; set; } = [];
 
 	public void Normalize()
 	{
 		RefreshIntervalMs = Math.Clamp(RefreshIntervalMs, 100, 10_000);
+
+		if (IdleCooldown <= TimeSpan.Zero)
+		{
+			throw new InvalidDataException("idleCooldown must be greater than zero.");
+		}
 
 		Thresholds = Thresholds
 			.Where(threshold => threshold.Duration > TimeSpan.Zero)
@@ -486,6 +547,42 @@ internal sealed class AppConfig
 				return threshold;
 			})
 			.ToList();
+	}
+}
+
+internal enum TimerMode
+{
+	Manual,
+	Auto
+}
+
+internal static class WindowsUserIdleTime
+{
+	public static TimeSpan Get()
+	{
+		var input = new LastInputInfo
+		{
+			Size = (uint)Marshal.SizeOf<LastInputInfo>()
+		};
+
+		if (!GetLastInputInfo(ref input))
+		{
+			throw new InvalidOperationException("Windows did not provide the last user input time.");
+		}
+
+		var idleMilliseconds = unchecked((uint)Environment.TickCount - input.TickCount);
+		return TimeSpan.FromMilliseconds(idleMilliseconds);
+	}
+
+	[DllImport("user32.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool GetLastInputInfo(ref LastInputInfo input);
+
+	[StructLayout(LayoutKind.Sequential)]
+	private struct LastInputInfo
+	{
+		public uint Size;
+		public uint TickCount;
 	}
 }
 
