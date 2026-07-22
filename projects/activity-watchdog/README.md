@@ -16,20 +16,21 @@ dotnet run --project ./projects/activity-watchdog/src/ActivityWatchdog.csproj
 - `H`: show the shortcut list in the console area.
 - `C`: clear the console details area.
 
-## Auto mode (Windows PoC)
+## Automatic reset (Windows PoC)
 
-Windows exposes the time since the last keyboard or mouse input, so auto mode does not require an additional package. Enable it in `appsettings.json`:
+Windows exposes the last keyboard or mouse input, so automatic reset does not require an additional package. Enable it by specifying `autoResetCooldown` in `appsettings.json`:
 
 ```json
 {
-  "mode": "auto",
-  "idleCooldown": "00:01:00"
+  "autoResetCooldown": "00:05:00"
 }
 ```
 
-When the app launches in auto mode, the timer remains at zero until the current Windows session has received no keyboard or mouse input for `idleCooldown`. It then starts automatically and continues running regardless of later input. Resetting it (with `R` or the banner button) returns it to the same waiting state, beginning the next cycle.
+The timer always starts immediately. If fresh input is detected within `autoResetCooldown` after a start or reset, the timer restarts from zero. The automatic reset also clears triggered thresholds and dismisses an active banner, just like resetting with `R` or the banner button.
 
-This PoC uses the small native Windows `GetLastInputInfo` API. Manual mode remains cross-platform; selecting auto mode on another operating system reports that it is unsupported.
+Omit `autoResetCooldown` to disable input monitoring and use the timer manually. When configured, its value must be greater than zero.
+
+This PoC uses the small native Windows `GetLastInputInfo` API. Without `autoResetCooldown`, the app remains cross-platform; configuring it on another operating system reports that it is unsupported.
 
 ## Config
 
